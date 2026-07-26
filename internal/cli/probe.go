@@ -19,10 +19,58 @@ import (
 	"github.com/renanbray/swoomps/internal/storage"
 )
 
+// probeConfig is the fully-resolved configuration for a single
+// `swoomps probe` invocation. It is the result of merging CLI
+// flags, environment, and the user config file, and is the input
+// to the rest of the probe pipeline.
+type probeConfig struct {
+	portsLo  uint16
+	portsHi  uint16
+	qps      int
+	workers  int
+	timeout  time.Duration
+	verbose  bool
+	ascii    bool
+	resume   bool
+	fileFlag string
+	seedsDir string
+	dbPath   string
+}
+
 // runProbe is the entry point for `swoomps probe`. It loads config,
 // opens the database, kicks off the scanner against the seeds
 // directory, and prints a summary on exit.
 func runProbe(args []string) error {
+	pc, err := parseProbeFlags(args)
+	if err != nil {
+		return err
+	}
+	if pc == nil {
+		// --help was printed.
+		return nil
+	}
+
+	setupLogging(pc.verbose)
+	styles := scanner.NewStyles(pc.ascii)
+	printHeader(os.Stdout, styles, pc)
+
+	repo, dbClose, err := openProbeRepo(pc.dbPath)
+	if err != nil {
+		return err
+	}
+	defer dbClose()
+
+	stats := runAndSummarize(os.Stdout, pc, repo)
+	if stats != nil {
+		printSummary(os.Stdout, stats, pc.dbPath, styles)
+	}
+	return nil
+}
+
+// parseProbeFlags resolves flags, environment, and config into a
+// single probeConfig. It does not open the database or start any
+// goroutines — pure parsing.
+func parseProbeFlags(args []string) (*probeConfig, error) {
 	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -54,21 +102,19 @@ func runProbe(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprintln(os.Stdout, probeUsage())
-			return nil
+			return nil, nil // sentinel: caller treats as no-op
 		}
-		return fmt.Errorf("parsing flags: %w", err)
+		return nil, fmt.Errorf("parsing flags: %w", err)
 	}
-
-	verbose := verboseFlag || verboseShortFlag
 
 	lo, hi, err := scanner.ParsePortRange(portsFlag)
 	if err != nil {
-		return fmt.Errorf("parsing --ports: %w", err)
+		return nil, fmt.Errorf("parsing --ports: %w", err)
 	}
 
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return nil, fmt.Errorf("loading config: %w", err)
 	}
 
 	seedsDir := cfg.SeedsDir
@@ -80,72 +126,114 @@ func runProbe(args []string) error {
 		dbPath = databaseFlag
 	}
 
-	// --file overrides the seeds directory.
-	var fileSeeds []model.Seed
-	if fileFlag != "" {
-		fileSeeds, err = scanner.LoadSeedFile(fileFlag)
-		if err != nil {
-			return fmt.Errorf("loading seeds from %q: %w", fileFlag, err)
-		}
-		if len(fileSeeds) == 0 {
-			return fmt.Errorf("no seeds found in %q", fileFlag)
-		}
-	}
+	return &probeConfig{
+		portsLo:  lo,
+		portsHi:  hi,
+		qps:      qpsFlag,
+		workers:  workersFlag,
+		timeout:  timeoutFlag,
+		verbose:  verboseFlag || verboseShortFlag,
+		ascii:    asciiFlag,
+		resume:   resumeFlag,
+		fileFlag: fileFlag,
+		seedsDir: seedsDir,
+		dbPath:   dbPath,
+	}, nil
+}
 
-	setupLogging(verbose)
-
-	styles := scanner.NewStyles(asciiFlag)
-
-	seedsLabel := seedsDir
-	if fileFlag != "" {
-		seedsLabel = fileFlag
-	}
-	fmt.Fprintf(os.Stdout, "%s %s\n",
-		styles.Label.Render("seeds:"),
-		styles.Value.Render(seedsLabel))
-	fmt.Fprintf(os.Stdout, "%s %s\n",
-		styles.Label.Render("db:   "),
-		styles.Value.Render(dbPath))
-
+// openProbeRepo opens the database, runs schema migrations, and
+// returns a Repository. The returned close func must be called
+// once to release the connection pool.
+func openProbeRepo(dbPath string) (*storage.Repository, func(), error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	db, err := storage.Open(ctx, dbPath)
 	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
+		stop()
+		return nil, nil, fmt.Errorf("opening database: %w", err)
 	}
-	defer func() { _ = db.Close() }()
+	closeFn := func() {
+		_ = db.Close()
+		stop()
+	}
 
 	if err := db.EnsureSchema(ctx); err != nil {
-		return fmt.Errorf("ensuring schema: %w", err)
+		closeFn()
+		return nil, nil, fmt.Errorf("ensuring schema: %w", err)
 	}
 
-	repo := storage.NewRepository(db)
+	return storage.NewRepository(db), closeFn, nil
+}
+
+// runAndSummarize resolves seeds from all sources (file, dir, or
+// default), runs the scan, and returns the resulting stats.
+// Cancellation is logged but not treated as an error (Ctrl+C is the
+// expected way to stop a scan).
+func runAndSummarize(w io.Writer, pc *probeConfig, repo *storage.Repository) *scanner.Stats {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Resolve seeds from the highest-priority source first.
+	var seeds []model.Seed
+	switch {
+	case pc.fileFlag != "":
+		s, err := scanner.LoadSeedFile(pc.fileFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] loading seeds from %q: %v\n", pc.fileFlag, err)
+			return nil
+		}
+		if len(s) == 0 {
+			fmt.Fprintf(os.Stderr, "[ERROR] no seeds found in %q\n", pc.fileFlag)
+			return nil
+		}
+		seeds = s
+	default:
+		s, err := scanner.LoadSeeds(pc.seedsDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] loading seeds from %q: %v\n", pc.seedsDir, err)
+			return nil
+		}
+		if len(s) == 0 {
+			fmt.Fprintf(os.Stderr, "[ERROR] no seeds found in %q\n", pc.seedsDir)
+			return nil
+		}
+		seeds = s
+	}
 
 	stats, err := scanner.RunScan(ctx, scanner.Options{
-		Workers:  workersFlag,
-		QPS:      qpsFlag,
-		Timeout:  timeoutFlag.String(),
-		PortsLo:  lo,
-		PortsHi:  hi,
-		Repo:     repo,
-		SeedsDir: seedsDir,
-		Seeds:    fileSeeds,
-		Verbose:  verbose,
-		ASCII:    asciiFlag,
-		Resume:   resumeFlag,
+		Workers: pc.workers,
+		QPS:     pc.qps,
+		Timeout: pc.timeout,
+		PortsLo: pc.portsLo,
+		PortsHi: pc.portsHi,
+		Repo:    repo,
+		Seeds:   seeds,
+		Verbose: pc.verbose,
+		ASCII:   pc.ascii,
+		Resume:  pc.resume,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "[ERROR] scanner: %v\n", err)
 	}
+	return stats
+}
 
-	printSummary(os.Stdout, stats, dbPath, styles)
-
-	return nil
+// printHeader writes the seeds/db banner above the progress bar.
+func printHeader(w io.Writer, styles *scanner.Styles, pc *probeConfig) {
+	seedsLabel := pc.seedsDir
+	if pc.fileFlag != "" {
+		seedsLabel = pc.fileFlag
+	}
+	fmt.Fprintf(w, "%s %s\n",
+		styles.Label.Render("seeds:"),
+		styles.Value.Render(seedsLabel))
+	fmt.Fprintf(w, "%s %s\n",
+		styles.Label.Render("db:   "),
+		styles.Value.Render(pc.dbPath))
 }
 
 // printSummary writes the final aggregated block.
-func printSummary(w io.Writer, stats scanner.Stats, dbPath string, styles *scanner.Styles) {
+func printSummary(w io.Writer, stats *scanner.Stats, dbPath string, styles *scanner.Styles) {
 	titleStyle := styles.Pct
 	keyStyle := styles.Label
 	accent := styles.Eta

@@ -147,8 +147,8 @@ func NewTicker(prog *Progress) *Ticker {
 	return &Ticker{prog: prog, out: w, done: make(chan struct{}), tty: isTTY}
 }
 
-// Start prints the header and first progress bar, then begins
-// overwriting the bar every interval. Returns immediately.
+// Start prints the header and first progress output, then begins
+// overwriting the two progress lines every interval. Returns immediately.
 func (t *Ticker) Start(interval time.Duration) {
 	if !t.tty {
 		fmt.Fprintln(t.out, t.prog.Header())
@@ -173,7 +173,7 @@ func (t *Ticker) Start(interval time.Duration) {
 	fmt.Fprintln(t.out, t.prog.Header())
 	fmt.Fprintln(t.out, t.prog.Render())
 
-	// Save cursor after the progress bar line.
+	// Save cursor after the two progress lines.
 	out.SaveCursorPosition()
 
 	go func() {
@@ -184,7 +184,9 @@ func (t *Ticker) Start(interval time.Duration) {
 			case <-t.done:
 				return
 			case <-ticker.C:
-				// Move up 1 line, clear, reprint bar.
+				// Move up 2 lines, clear both, reprint.
+				out.CursorUp(1)
+				out.ClearLine()
 				out.CursorUp(1)
 				out.ClearLine()
 				fmt.Fprintln(t.out, t.prog.Render())
@@ -194,7 +196,7 @@ func (t *Ticker) Start(interval time.Duration) {
 	}()
 }
 
-// InsertAbove writes a block of text above the sticky progress bar.
+// InsertAbove writes a block of text above the sticky progress lines.
 func (t *Ticker) InsertAbove(block string) {
 	if block == "" {
 		return
@@ -206,14 +208,16 @@ func (t *Ticker) InsertAbove(block string) {
 
 	out := termenv.NewOutput(t.out.(*os.File))
 
-	// Move up 1 line (the progress bar).
+	// Move up 2 lines and clear both.
+	out.CursorUp(1)
+	out.ClearLine()
 	out.CursorUp(1)
 	out.ClearLine()
 
 	// Print the found block.
 	fmt.Fprint(t.out, block)
 
-	// Reprint the progress bar below.
+	// Reprint the two progress lines below.
 	fmt.Fprintln(t.out, t.prog.Render())
 	out.SaveCursorPosition()
 }
@@ -241,6 +245,10 @@ type Progress struct {
 
 	Out    io.Writer
 	Styles *Styles
+
+	// State is the shared progress state updated by the generator
+	// and workers. The renderer only reads from it.
+	State *ProgressState
 }
 
 // Header returns the static config line printed once at the start of
@@ -250,7 +258,7 @@ func (p *Progress) Header() string {
 		p.PortsLo, p.PortsHi, p.QPS, p.Workers, p.Timeout)
 }
 
-// Render returns one status line.
+// Render returns two lines: per-IP progress bar and overall progress bar.
 func (p *Progress) Render() string {
 	probed := p.Probed.Load()
 	if probed > p.Total {
@@ -271,24 +279,67 @@ func (p *Progress) Render() string {
 	}
 
 	const width = 30
-	filled := int(float64(width) * pct / 100)
-	if filled > width {
-		filled = width
-	}
 	filledChar, emptyChar := "█", "░"
 	if p.Styles != nil && p.Styles.ascii {
 		filledChar, emptyChar = "#", "."
 	}
-	bar := p.Styles.BarFilled.Render(strings.Repeat(filledChar, filled)) +
+
+	// --- overall bar (line 2) ---
+	filled := int(float64(width) * pct / 100)
+	if filled > width {
+		filled = width
+	}
+	overallBar := p.Styles.BarFilled.Render(strings.Repeat(filledChar, filled)) +
 		p.Styles.BarEmpty.Render(strings.Repeat(emptyChar, width-filled))
 
-	return fmt.Sprintf("%s  %s  %s  ETA %s  %s",
-		bar,
+	line2 := fmt.Sprintf("%s  %s  %s  ETA %s  %s",
+		overallBar,
 		p.Styles.Pct.Render(fmt.Sprintf("%5.1f%%", pct)),
-		p.Styles.Meta.Render(fmt.Sprintf("(%d/%d)", probed, p.Total)),
+		p.Styles.Meta.Render(fmt.Sprintf("(%s)", formatCount(probed)+"/"+formatCount(p.Total))),
 		p.Styles.Eta.Render(formatDuration(eta)),
 		p.Styles.Pps.Render(fmt.Sprintf("%.0f pps", pps)),
 	)
+
+	// --- per-IP bar (line 1) ---
+	seedTotal := int64(p.PortsHi - p.PortsLo + 1)
+	var ipPct float64
+	var ipScanned int64
+	if p.State != nil {
+		ipScanned = p.State.CurrentScanned.Load()
+		if ipScanned > seedTotal {
+			ipScanned = seedTotal
+		}
+		if seedTotal > 0 {
+			ipPct = float64(ipScanned) / float64(seedTotal) * 100
+		}
+	}
+
+	ipFilled := int(float64(width) * ipPct / 100)
+	if ipFilled > width {
+		ipFilled = width
+	}
+	ipBar := p.Styles.BarFilled.Render(strings.Repeat(filledChar, ipFilled)) +
+		p.Styles.BarEmpty.Render(strings.Repeat(emptyChar, width-ipFilled))
+
+	var seedLabel string
+	if p.State != nil {
+		// Prefer the per-probe Current (IP:Port) when available;
+		// fall back to the seed IP before the first probe lands.
+		if cp := p.State.Current.Load(); cp != nil && *cp != "" {
+			seedLabel = *cp
+		} else if cp := p.State.CurrentSeed.Load(); cp != nil {
+			seedLabel = *cp
+		}
+	}
+
+	line1 := fmt.Sprintf("%s  %s  %s  %s",
+		ipBar,
+		p.Styles.Pct.Render(fmt.Sprintf("%5.1f%%", ipPct)),
+		p.Styles.Meta.Render(fmt.Sprintf("(%s)", formatCount(ipScanned)+"/"+formatCount(seedTotal))),
+		p.Styles.Meta.Render("scanning: ")+p.Styles.Value.Render(seedLabel),
+	)
+
+	return line1 + "\n" + line2
 }
 
 // formatDuration turns a duration into a compact ETA-style string:
@@ -304,4 +355,48 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
 	}
 	return fmt.Sprintf("%d:%02d", m, s)
+}
+
+// ProgressState tracks the live state shared between the target
+// generator (writer for seed-level state), worker pool (writer for
+// the per-probe field), and the progress renderer (reader of all).
+//
+// The generator owns CurrentSeed and resets CurrentScanned to 0 on
+// each new seed. Workers own Current and increment CurrentScanned
+// after each completed probe. Only the renderer reads these.
+// Atomic.Pointer is used to avoid copying the string on every write.
+type ProgressState struct {
+	// Current is the IP:Port currently being probed. Updated by
+	// workers before each probe; read by the progress renderer.
+	Current atomic.Pointer[string]
+
+	// CurrentSeed is the IP whose ports are being scanned right now.
+	// Written by the target generator when a new seed starts.
+	CurrentSeed atomic.Pointer[string]
+
+	// CurrentScanned counts probes completed for CurrentSeed.
+	// Reset to 0 by the generator on seed change; incremented by
+	// workers after each probe.
+	CurrentScanned atomic.Int64
+}
+
+// NewProgressState returns an empty ProgressState. Safe for zero value
+// use, but constructing explicitly documents ownership.
+func NewProgressState() *ProgressState {
+	return &ProgressState{}
+}
+
+// FormatCount turns a number into a compact string: 1234 → "1234",
+// 1234567 → "1.2M", 268000000 → "268M".
+func formatCount(n int64) string {
+	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.1fG", float64(n)/1_000_000_000)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 10_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }

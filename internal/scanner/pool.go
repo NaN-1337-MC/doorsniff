@@ -47,10 +47,22 @@ type PoolConfig struct {
 	PortsLo uint16
 	PortsHi uint16
 
+	// State is the shared progress state. It must be the same
+	// instance passed to generateTargets (or NewProgressState when
+	// the caller does not use the generator). When nil, Run
+	// creates a throwaway instance.
+	State *ProgressState
+
 	// Ticker is the sticky progress bar. When non-nil the worker
 	// calls ticker.InsertAbove to display found-server blocks
 	// without scrolling the bar.
 	Ticker *Ticker
+
+	// ProcessedHook, when non-nil, is called by the worker for
+	// every target after the probe completes (success or error).
+	// Used by tests to assert that each target is processed
+	// exactly once.
+	ProcessedHook func(model.Target)
 }
 
 // Run consumes the target channel and dispatches each target to a
@@ -65,7 +77,10 @@ type PoolConfig struct {
 // On context cancellation, in-flight probes return. Run returns when
 // all workers have exited, the DB writer has drained the result
 // channel, and the progress goroutine has stopped.
-func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stats, error) {
+//
+// The returned *Stats must not be modified by the caller; counters
+// are owned by Run and shared with the progress renderer.
+func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (*Stats, error) {
 	start := time.Now()
 
 	if cfg.Workers <= 0 {
@@ -88,6 +103,10 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stat
 	results := make(chan model.Server, 256)
 
 	stats := &Stats{}
+	state := cfg.State
+	if state == nil {
+		state = NewProgressState()
+	}
 
 	var tick *Ticker
 	if cfg.Total > 0 {
@@ -104,6 +123,7 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stat
 			Timeout: cfg.Timeout,
 			Out:     w,
 			Styles:  styles,
+			State:   state,
 		}
 		tick = NewTicker(prog)
 		tick.Start(500 * time.Millisecond)
@@ -129,8 +149,21 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stat
 	g.SetLimit(cfg.Workers)
 
 	for i := 0; i < cfg.Workers; i++ {
+		wk := &worker{
+			targets:       targets,
+			limiter:       limiter,
+			timeout:       cfg.Timeout,
+			verbose:       cfg.Verbose,
+			w:             w,
+			styles:        styles,
+			results:       results,
+			stats:         stats,
+			tick:          cfg.Ticker,
+			state:         state,
+			processedHook: cfg.ProcessedHook,
+		}
 		g.Go(func() error {
-			return runWorker(gctx, targets, limiter, cfg.Timeout, cfg.Verbose, w, styles, results, stats, cfg.Ticker)
+			return wk.run(gctx)
 		})
 	}
 
@@ -143,145 +176,183 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stat
 	}
 
 	stats.Duration = time.Since(start)
-	return *stats, workerErr
+	return stats, workerErr
 }
 
 // runWorker is the body of one pool worker. It reads targets until the
 // channel is closed or the context is cancelled. When verbose is
 // false, per-target error lines are suppressed — only successful
 // discoveries and the final summary are printed.
-func runWorker(
-	ctx context.Context,
-	targets <-chan model.Target,
-	limiter *rate.Limiter,
-	timeout time.Duration,
-	verbose bool,
-	w io.Writer,
-	styles *Styles,
-	results chan<- model.Server,
-	stats *Stats,
-	tick *Ticker,
-) error {
+// worker is the body of one pool worker. It carries all the
+// dependencies the inner loop needs, so adding a new feature (a
+// webhook hook, metrics, a per-IP rate limit) is a one-field change
+// instead of a one-parameter change.
+type worker struct {
+	targets       <-chan model.Target
+	limiter       *rate.Limiter
+	timeout       time.Duration
+	verbose       bool
+	w             io.Writer
+	styles        *Styles
+	results       chan<- model.Server
+	stats         *Stats
+	tick          *Ticker
+	state         *ProgressState
+	processedHook func(model.Target)
+}
+
+// run reads targets until the channel is closed or the context is
+// cancelled. When verbose is false, per-target error lines are
+// suppressed — only successful discoveries and the final summary are
+// printed.
+func (wk *worker) run(ctx context.Context) error {
 	for {
 		var t model.Target
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case got, ok := <-targets:
+		case got, ok := <-wk.targets:
 			if !ok {
 				return nil
 			}
 			t = got
 		}
 
-		if err := limiter.Wait(ctx); err != nil {
-			return err
-		}
+		wk.processTarget(ctx, t)
 
-		stats.Probed.Add(1)
-
-		open, err := Probe(ctx, t.IP, t.Port, timeout)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			stats.Errors.Add(1)
-			slog.Debug("tcp probe error", "ip", t.IP, "port", t.Port, "err", err)
-			if verbose {
-				fmt.Fprintf(w, "[-] %s:%d  tcp error: %v\n", t.IP, t.Port, err)
-			}
-			continue
-		}
-		if !open {
-			continue
-		}
-
-		resp, latency, err := slp.Ping(ctx, t.IP, t.Port, timeout)
-		if err != nil {
-			// If the modern handshake RSTs, fall back to the 1.6
-			// legacy ping. This covers BungeeCord with
-			// ping_passthrough enabled and pre-1.7 servers.
-			var legacy *slp.LegacyResponse
-			var legacyLatency time.Duration
-			var legacyErr error
-			if isConnReset(err) {
-				legacy, legacyLatency, legacyErr = slp.PingLegacy(ctx, t.IP, t.Port, timeout)
-			}
-
-			if legacy != nil && legacyErr == nil {
-				now := time.Now().UTC()
-				s := model.Server{
-					IP:            t.IP,
-					Port:          t.Port,
-					FirstSeen:     now,
-					LastSeen:      now,
-					LastLatencyMs: legacyLatency.Milliseconds(),
-					VersionName:   legacy.Version,
-					MOTD:          legacy.MOTD,
-					NumPlayers:    legacy.NumPlayers,
-					MaxPlayers:    legacy.MaxPlayers,
-					QueryEnabled:  false,
-					ProbeKind:     model.ProbeLegacy,
-				}
-				select {
-				case results <- s:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-				stats.Found.Add(1)
-				if tick != nil {
-					tick.InsertAbove(styles.FormatFound(s))
-				} else {
-					fmt.Fprint(w, styles.FormatFound(s))
-				}
-				continue
-			}
-
-			stats.Errors.Add(1)
-			if verbose {
-				hint := ""
-				switch {
-				case isConnReset(err):
-					hint = " (server RST — likely BungeeCord/proxy, legacy also failed)"
-				case ctx.Err() != nil:
-					hint = " (cancelled)"
-				}
-				fmt.Fprintf(w, "[-] %s:%d  slp failed%s\n", t.IP, t.Port, hint)
-			}
-			slog.Debug("slp error", "ip", t.IP, "port", t.Port, "err", err)
-			continue
-		}
-
-		now := time.Now().UTC()
-		s := model.Server{
-			IP:              t.IP,
-			Port:            t.Port,
-			FirstSeen:       now,
-			LastSeen:        now,
-			LastLatencyMs:   latency.Milliseconds(),
-			VersionProtocol: resp.Version.Protocol,
-			VersionName:     resp.Version.Name,
-			MOTD:            resp.Description,
-			NumPlayers:      resp.Players.Online,
-			MaxPlayers:      resp.Players.Max,
-			SamplePlayers:   toModelSample(resp.Players.Sample),
-			QueryEnabled:    false,
-			ProbeKind:       model.ProbeSLP,
-		}
-
-		select {
-		case results <- s:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		stats.Found.Add(1)
-		if tick != nil {
-			tick.InsertAbove(styles.FormatFound(s))
-		} else {
-			fmt.Fprint(w, styles.FormatFound(s))
+		// The processed hook fires once per target, regardless of
+		// outcome (success, error, port closed). Used by tests to
+		// assert each target is processed exactly once.
+		if wk.processedHook != nil {
+			wk.processedHook(t)
 		}
 	}
+}
+
+// processTarget runs the probe → SLP → legacy fallback → result
+// pipeline for a single target. Each outcome (success, port closed,
+// probe error, slp error) updates stats accordingly.
+func (wk *worker) processTarget(ctx context.Context, t model.Target) {
+	// Update current target display. Heap-allocate so the
+	// atomic.Pointer keeps the string alive; a stack-local
+	// `addr := ...` would dangle at the next loop iteration.
+	addrPtr := new(string)
+	*addrPtr = t.Address()
+	wk.state.Current.Store(addrPtr)
+
+	if err := wk.limiter.Wait(ctx); err != nil {
+		return
+	}
+
+	wk.stats.Probed.Add(1)
+	// CurrentScanned is owned by the generator; workers do not
+	// touch it. Per-IP bar and scanning label can drift by the
+	// channel buffer (~5s at 200 qps), which is acceptable.
+
+	open, err := Probe(ctx, t.IP, t.Port, wk.timeout)
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		wk.stats.Errors.Add(1)
+		slog.Debug("tcp probe error", "ip", t.IP, "port", t.Port, "err", err)
+		if wk.verbose {
+			fmt.Fprintf(wk.w, "[-] %s:%d  tcp error: %v\n", t.IP, t.Port, err)
+		}
+		return
+	}
+	if !open {
+		return
+	}
+
+	resp, latency, err := slp.Ping(ctx, t.IP, t.Port, wk.timeout)
+	if err != nil {
+		// If the modern handshake RSTs, fall back to the 1.6
+		// legacy ping. This covers BungeeCord with
+		// ping_passthrough enabled and pre-1.7 servers.
+		var legacy *slp.LegacyResponse
+		var legacyLatency time.Duration
+		var legacyErr error
+		if isConnReset(err) {
+			legacy, legacyLatency, legacyErr = slp.PingLegacy(ctx, t.IP, t.Port, wk.timeout)
+		}
+
+		if legacy != nil && legacyErr == nil {
+			now := time.Now().UTC()
+			s := model.Server{
+				IP:            t.IP,
+				Port:          t.Port,
+				FirstSeen:     now,
+				LastSeen:      now,
+				LastLatencyMs: legacyLatency.Milliseconds(),
+				VersionName:   legacy.Version,
+				MOTD:          legacy.MOTD,
+				NumPlayers:    legacy.NumPlayers,
+				MaxPlayers:    legacy.MaxPlayers,
+				QueryEnabled:  false,
+				ProbeKind:     model.ProbeLegacy,
+			}
+			select {
+			case wk.results <- s:
+			case <-ctx.Done():
+				return
+			}
+			wk.stats.Found.Add(1)
+			wk.printFound(s)
+			return
+		}
+
+		wk.stats.Errors.Add(1)
+		if wk.verbose {
+			hint := ""
+			switch {
+			case isConnReset(err):
+				hint = " (server RST — likely BungeeCord/proxy, legacy also failed)"
+			case ctx.Err() != nil:
+				hint = " (cancelled)"
+			}
+			fmt.Fprintf(wk.w, "[-] %s:%d  slp failed%s\n", t.IP, t.Port, hint)
+		}
+		slog.Debug("slp error", "ip", t.IP, "port", t.Port, "err", err)
+		return
+	}
+
+	now := time.Now().UTC()
+	s := model.Server{
+		IP:              t.IP,
+		Port:            t.Port,
+		FirstSeen:       now,
+		LastSeen:        now,
+		LastLatencyMs:   latency.Milliseconds(),
+		VersionProtocol: resp.Version.Protocol,
+		VersionName:     resp.Version.Name,
+		MOTD:            resp.Description,
+		NumPlayers:      resp.Players.Online,
+		MaxPlayers:      resp.Players.Max,
+		SamplePlayers:   toModelSample(resp.Players.Sample),
+		QueryEnabled:    false,
+		ProbeKind:       model.ProbeSLP,
+	}
+
+	select {
+	case wk.results <- s:
+	case <-ctx.Done():
+		return
+	}
+
+	wk.stats.Found.Add(1)
+	wk.printFound(s)
+}
+
+// printFound sends a discovered-server card to the right sink. When
+// a sticky ticker is in use, the card is inserted above the bar
+// (cursor control). Otherwise it scrolls to stdout directly.
+func (wk *worker) printFound(s model.Server) {
+	if wk.tick != nil {
+		wk.tick.InsertAbove(wk.styles.FormatFound(s))
+		return
+	}
+	fmt.Fprint(wk.w, wk.styles.FormatFound(s))
 }
 
 func toModelSample(s []slp.SamplePlayer) []model.SamplePlayer {

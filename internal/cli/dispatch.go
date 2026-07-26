@@ -49,12 +49,12 @@ Usage:
   swoomps <command> [flags]
 
 Commands:
-  probe               scan seeds from the configured directory
-  init                initialize config and database
-  seed add <host>     add a seed host (hostname or IP[:port])
-  scan                start scanning (runs until interrupted)
+  probe               scan seeds from the configured directory or a file
   list                query and display found servers
-  tui                 live dashboard (view scan progress)
+  scan                long-running scan (em breve)
+  tui                 live dashboard (em breve)
+  init                initialize config and database (em breve)
+  seed                manage seeds (em breve)
   version             print version
 
 Run 'swoomps help <command>' for more info on a command.`)
