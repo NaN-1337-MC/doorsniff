@@ -38,6 +38,9 @@ In scope (planned):
 
 - TUI dashboard behind `swoomps tui` (Bubbletea).
 - Query protocol (UDP) — basic and full stat, with plugin list.
+- Offline-mode detection: after SLP finds a server, attempt a Login
+  handshake to determine online-mode (premium) vs offline-mode (cracked).
+  Detects whitelist/ban via disconnect messages.
 - GeoIP enrichment of found servers.
 - JSON / CSV export.
 
@@ -57,40 +60,31 @@ Out of scope:
 | 1 | Foundation | done | `model.Server`, `config` package, SQLite storage + migrations |
 | 2 | SLP protocol | done | TCP 1.7+ handshake, JSON response parser |
 | 3 | Legacy SLP | done | 1.6 ping used as fallback when modern handshake RSTs |
-| 4 | Query protocol | pending | UDP handshake, basic + full stat parsers |
+| 4 | Query protocol | done | UDP handshake + full stat parser, FakeServer, worker integration |
 | 5 | Port scanner | done | TCP connect probe with rate limit, errgroup worker pool |
 | 6 | Scanner core | done | target generator (seeds × ports), CIDR expansion, worker pool |
 | 7 | CLI subcommands | done | `probe`, `list`, `init`, `seed`; `scan` and `tui` are stubs |
 | 8 | Storage | done | upsert with port + probe_kind; `list` with 7 filters |
 | 9 | Polish | done | sticky progress bar, per-IP bar, `--resume`, ASCII mode, seeds.txt population |
 | 10 | TUI dashboard | pending | Bubbletea dashboard behind `swoomps tui` |
+| 11 | Offline-mode detection | pending | Login handshake to detect cracked/premium/whitelisted servers |
 
 ## Current focus
 
-Documentation reflection of the current code, plus a refactoring pass
-to address the technical debt surfaced by the feature freeze review
-(see [architecture.md](./architecture.md#known-tech-debt)).
+Query protocol (Phase 4) is complete:
 
-The scanner refactor is complete:
-
-1. ✅ `Stats` passed by pointer everywhere (no `go vet` warnings).
-2. ✅ `ProgressState` struct extracted (generator ↔ renderer decoupled).
-3. ✅ `worker` struct replaces 12-param `runWorker` function.
-4. ✅ `Options.Timeout` is `time.Duration` throughout (default 1s).
-5. ✅ `TestRunProcessesEachTargetOnce` uses `ProcessedHook` callback.
-6. ✅ `Options.Seeds` unified — `SeedsDir` removed from scanner.
-
-Next deliverable is E2E testing infrastructure (see `slptest/` package
-and `//go:build integration` tests).
-
-The E2E test suite is complete:
-
-- `slptest/server.go` — `FakeServer` test double speaking real SLP
-  (modern + legacy), with RST support for fallback testing.
-- `scanner/e2e_test.go` — 5 tests: seed-file-to-DB, legacy fallback,
-  port-closed, CIDR expansion (4 loopback servers), resume skip.
-- `cli/e2e_test.go` — 2 tests: flag parsing (6 subcases), pipeline
-  integration (`runAndSummarize` end-to-end).
+- `internal/protocol/query/` — UDP client: handshake + full-stat
+  request, `Response` struct, `ParseFullStat` parser, `ParsePlugins`
+  for Bukkit-format plugin strings.
+- `internal/protocol/query/querytest/` — `FakeServer` test double
+  speaking real Query protocol (handshake + full stat).
+- Worker integration: after SLP success, Query is called to enrich
+  server data with `map`, `gametype`, `plugins`, and `player_names`.
+  `ProbeKind` set to `slp+query` when Query responds.
+- Migration v3: `map` and `gametype` columns added to `servers` table.
+- `model.Server` updated with `Map` and `GameType` fields.
+- E2E tests: 4 tests covering full stat, timeout, plugin parsing,
+  and empty server.
 
 ## Decision logs
 

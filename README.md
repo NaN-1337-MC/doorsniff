@@ -71,6 +71,7 @@ checkpoint.
 | `--version VER` | — | Comma-separated version substrings, OR'd |
 | `--engine ENG` | — | Engine substring, case-insensitive |
 | `--players EXPR` | — | Player predicate (`>1`, `<50`, `1-10`, `=5`) |
+| `--maxplayers EXPR` | — | Max players predicate (`>=100`, `50-200`, `<500`) |
 | `--port PORT` | — | Port or port range |
 | `--motd TEXT` | — | MOTD substring search |
 | `--sort KEY` | `recent` | Sort: `players`, `latency`, `version`, `port`, `recent`, `oldest` |

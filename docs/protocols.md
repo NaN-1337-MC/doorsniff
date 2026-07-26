@@ -1,21 +1,20 @@
 # Protocols
 
-The scanner speaks the Minecraft Server List Ping in two variants:
-the modern 1.7+ handshake (TCP) and the legacy 1.6 ping (TCP). The
-modern path is always tried first; the legacy path is used as a
-fallback when the modern handshake is RST'd by a proxy
-(BungeeCord / Velocity without `ping_passthrough`).
+The scanner speaks three Minecraft protocols:
 
-A future version will add the Query protocol (UDP). The driver lives
-at `internal/protocol/query/query.go` but is not wired into the
-scanner yet.
+1. **SLP modern 1.7+** (TCP) — the primary discovery method.
+2. **SLP legacy 1.6** (TCP) — fallback for BungeeCord / Velocity
+   proxies that RST the modern handshake.
+3. **Query full stat** (UDP) — enrichment layer that provides the
+   plugin list, map name, game type, and player names that SLP
+   does not return.
 
 Both protocols are documented at <https://wiki.vg/Server_List_Ping>
 and <https://wiki.vg/Query>.
 
 ## Conventions
 
-- **Port.** Default for both protocols is 25565.
+- **Port.** Default for all protocols is 25565.
 - **Timeout.** All probes use a 1-second dial + read deadline by
   default. Configurable via `--timeout` and `SWOOMPS_TIMEOUT`.
 - **Varint.** Defined in the Minecraft protocol spec. Each byte uses
@@ -28,6 +27,8 @@ and <https://wiki.vg/Query>.
   then UTF-8 bytes).
 - **UTF-16BE.** The legacy 1.6 protocol uses UTF-16BE for the entire
   kick packet body. Decoded with `unicode/utf16.Decode`.
+- **UDP.** Query uses fixed-size integer fields (big-endian), not
+  varints. No connection state; each packet is independent.
 
 ## Server List Ping (SLP) — modern 1.7+
 
@@ -156,9 +157,97 @@ never tried for ports where the modern handshake completed.
   mode) can confuse the SLP parser because the response is from the
   proxy, not the backend. There is no mitigation; the recorded
   data is the proxy's view of the world.
-- The Query protocol is not yet implemented in the scanner, even
-  though the protocol code lives in `internal/protocol/query/`. It
-  will be wired in once the TUI and `--format json` features land.
+- Query must be explicitly enabled on the server (`enable-query=true`
+  in `server.properties`). Many servers do not enable it, so a
+  Query failure after SLP success is expected and not an error.
+
+## Query Protocol — UDP
+
+Query is a UDP-based protocol introduced in Beta 1.9 that returns
+richer server information than SLP. It must be enabled on the server.
+swoomps always uses **full stat** mode because it includes the plugin
+list and player names.
+
+### Handshake (Type 0x09)
+
+```
+Client -> Server:  [FE FD] [09] [session_id 4 bytes]          (7 bytes)
+Server -> Client:  [09]     [session_id 4 bytes] [token\0]    (variable)
+```
+
+The challenge token is a null-terminated ASCII decimal string. The
+client converts it to an int32 and includes it in the stat request.
+
+The token expires every ~30 seconds. It is bound to the client's
+IP and port, not to the session ID.
+
+### Full Stat (Type 0x00)
+
+```
+Client -> Server:  [FE FD] [00] [session_id 4B] [challenge 4B] [padding 4B]
+Server -> Client:  [00]     [session_id 4B] [payload...]
+```
+
+The payload has two sections:
+
+1. **K/V section:** preceded by 11-byte `splitnum` prefix
+   (`"splitnum\0\x80\x00"`), then null-terminated key-value pairs
+   alternating, terminated by an empty key.
+
+2. **Player section:** preceded by 10-byte separator
+   (`\x01player_\0\0`), then null-terminated player names, terminated
+   by an empty name.
+
+| Key | Example | Description |
+|---|---|---|
+| `hostname` | `A Minecraft Server` | MOTD |
+| `gametype` | `SMP` | Game type (always SMP) |
+| `game_id` | `MINECRAFT` | Always MINECRAFT |
+| `version` | `1.21.1` | Server version |
+| `plugins` | `Paper 1.21.1: Essentials; Vault` | Bukkit-format plugin list |
+| `map` | `world` | Current map name |
+| `numplayers` | `5` | Online players (string) |
+| `maxplayers` | `100` | Max players (string) |
+| `hostport` | `25565` | Server port (little-endian short) |
+| `hostip` | `127.0.0.1` | Server IP |
+
+### Plugin format
+
+The `plugins` key uses the Bukkit convention:
+
+```
+[SERVER_MOD_NAME[: PLUGIN_NAME(; PLUGIN_NAME...)]]
+```
+
+Example: `Paper on 1.21.1-R0.1-SNAPSHOT: Essentials 2.19.0; Vault 1.7.3`
+
+Parsed by `query.ParsePlugins()` into `[]struct{ Name, Version string }`.
+
+### Integration in the scanner
+
+After a successful SLP probe, the worker calls `query.Query()` on
+the same host:port. If Query responds:
+
+- `QueryEnabled` is set to `true`
+- `Map`, `GameType`, and `Plugins` are enriched from Query data
+- `SamplePlayers` is enriched with player names (if SLP had none)
+- `ProbeKind` is set to `"slp+query"`
+
+If Query fails (expected when the server hasn't enabled it), the
+SLP-only data is kept and `ProbeKind` remains `"slp"`.
+
+### Errors
+
+Query uses sentinel errors:
+
+| Error | Meaning |
+|---|---|
+| `ErrHandshake` | Handshake packet failed |
+| `ErrStat` | Stat request failed |
+| `ErrBadMagic` | Response magic mismatch |
+| `ErrBadSessionID` | Session ID mismatch |
+| `ErrBadChallenge` | Invalid challenge token |
+| `ErrResponseShort` | Response too short |
 
 ## References
 

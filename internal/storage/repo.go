@@ -76,12 +76,12 @@ INSERT INTO servers (
   ip, port, first_seen, last_seen, last_latency_ms,
   version_protocol, version_name, motd,
   num_players, max_players, sample_players,
-  query_enabled, plugins, country, raw_query, probe_kind
+  query_enabled, plugins, map, gametype, country, raw_query, probe_kind
 ) VALUES (
   ?, ?, ?, ?, ?,
   ?, ?, ?,
   ?, ?, ?,
-  ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT (ip, port) DO UPDATE SET
   last_seen       = excluded.last_seen,
@@ -94,6 +94,8 @@ ON CONFLICT (ip, port) DO UPDATE SET
   sample_players  = excluded.sample_players,
   query_enabled   = excluded.query_enabled,
   plugins         = excluded.plugins,
+  map             = excluded.map,
+  gametype        = excluded.gametype,
   country         = excluded.country,
   raw_query       = excluded.raw_query,
   probe_kind      = excluded.probe_kind;
@@ -113,6 +115,8 @@ ON CONFLICT (ip, port) DO UPDATE SET
 		sampleJSON,
 		s.QueryEnabled,
 		pluginsJSON,
+		nullableString(s.Map),
+		nullableString(s.GameType),
 		nullableString(s.Country),
 		nullableString(s.RawQuery),
 		nullableString(s.ProbeKind),
@@ -171,7 +175,7 @@ func (r *Repository) ListServers(ctx context.Context, opts ListOptions) ([]model
 SELECT ip, port, first_seen, last_seen, last_latency_ms,
        version_protocol, version_name, motd,
        num_players, max_players, sample_players,
-       query_enabled, plugins, country, raw_query, probe_kind
+       query_enabled, plugins, map, gametype, country, raw_query, probe_kind
 FROM servers%s
 ORDER BY %s
 LIMIT ? OFFSET ?;
@@ -203,15 +207,17 @@ LIMIT ? OFFSET ?;
 // is optional; zero value means "no filter". The CLI builds this from
 // flags and the repo turns it into SQL.
 type ListQuery struct {
-	PlayerSQL string   // raw SQL fragment for player filter, e.g. "(num_players > ?)"
-	PlayerArgs []any   // args for PlayerSQL
-	Versions  []string // version substrings to match (OR'd)
-	Engine    string   // engine substring (case-insensitive LIKE)
-	MOTD      string   // MOTD substring (case-insensitive LIKE)
-	PortLo    uint16   // 0 = no filter
-	PortHi    uint16   // 0 = no filter
-	OrderBy   string   // SQL ORDER BY fragment, default "last_seen DESC"
-	Limit     int      // 0 = default 50
+	PlayerSQL     string   // raw SQL fragment for player filter
+	PlayerArgs    []any    // args for PlayerSQL
+	MaxPlayerSQL  string   // raw SQL fragment for max players filter
+	MaxPlayerArgs []any    // args for MaxPlayerSQL
+	Versions      []string // version substrings to match (OR'd)
+	Engine        string   // engine substring (case-insensitive LIKE)
+	MOTD          string   // MOTD substring (case-insensitive LIKE)
+	PortLo        uint16   // 0 = no filter
+	PortHi        uint16   // 0 = no filter
+	OrderBy       string   // SQL ORDER BY fragment, default "last_seen DESC"
+	Limit         int      // 0 = default 50
 }
 
 // ListServersFiltered executes a flexible query built from ListQuery.
@@ -232,6 +238,12 @@ func (r *Repository) ListServersFiltered(ctx context.Context, q ListQuery) ([]mo
 	if q.PlayerSQL != "" {
 		conds = append(conds, q.PlayerSQL)
 		args = append(args, q.PlayerArgs...)
+	}
+
+	// Max players filter.
+	if q.MaxPlayerSQL != "" {
+		conds = append(conds, q.MaxPlayerSQL)
+		args = append(args, q.MaxPlayerArgs...)
 	}
 
 	// Version substring match.
@@ -276,7 +288,7 @@ func (r *Repository) ListServersFiltered(ctx context.Context, q ListQuery) ([]mo
 SELECT ip, port, first_seen, last_seen, last_latency_ms,
        version_protocol, version_name, motd,
        num_players, max_players, sample_players,
-       query_enabled, plugins, country, raw_query, probe_kind
+       query_enabled, plugins, map, gametype, country, raw_query, probe_kind
 FROM servers%s
 ORDER BY %s
 LIMIT ?;
@@ -408,6 +420,8 @@ func scanServer(rs rowScanner) (model.Server, error) {
 		maxPl      sql.NullInt64
 		sampleRaw  sql.NullString
 		pluginsRaw sql.NullString
+		mapName    sql.NullString
+		gametype   sql.NullString
 		country    sql.NullString
 		rawQuery   sql.NullString
 		probeKind  sql.NullString
@@ -429,6 +443,8 @@ func scanServer(rs rowScanner) (model.Server, error) {
 		&sampleRaw,
 		&s.QueryEnabled,
 		&pluginsRaw,
+		&mapName,
+		&gametype,
 		&country,
 		&rawQuery,
 		&probeKind,
@@ -457,6 +473,8 @@ func scanServer(rs rowScanner) (model.Server, error) {
 	if pluginsRaw.Valid && pluginsRaw.String != "" {
 		_ = json.Unmarshal([]byte(pluginsRaw.String), &s.Plugins)
 	}
+	s.Map = mapName.String
+	s.GameType = gametype.String
 	s.Country = country.String
 	s.RawQuery = rawQuery.String
 	s.ProbeKind = probeKind.String

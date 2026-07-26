@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -132,12 +133,21 @@ func xdgConfigHome() string {
 	if v := os.Getenv("SWOOMPS_CONFIG_PATH"); v != "" {
 		return filepath.Dir(v)
 	}
-	if v := os.Getenv("XDG_CONFIG_HOME"); v != "" {
-		return filepath.Join(v, "swoomps")
+	if runtime.GOOS == "windows" {
+		if v := os.Getenv("APPDATA"); v != "" {
+			return filepath.Join(v, "swoomps")
+		}
+	} else {
+		if v := os.Getenv("XDG_CONFIG_HOME"); v != "" {
+			return filepath.Join(v, "swoomps")
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "."
+	}
+	if runtime.GOOS == "windows" {
+		return filepath.Join(home, "AppData", "Roaming", "swoomps")
 	}
 	return filepath.Join(home, ".config", "swoomps")
 }
@@ -146,12 +156,21 @@ func xdgDataHome() string {
 	if v := os.Getenv("SWOOMPS_DATA_PATH"); v != "" {
 		return filepath.Dir(v)
 	}
-	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
-		return filepath.Join(v, "swoomps")
+	if runtime.GOOS == "windows" {
+		if v := os.Getenv("LOCALAPPDATA"); v != "" {
+			return filepath.Join(v, "swoomps")
+		}
+	} else {
+		if v := os.Getenv("XDG_DATA_HOME"); v != "" {
+			return filepath.Join(v, "swoomps")
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "."
+	}
+	if runtime.GOOS == "windows" {
+		return filepath.Join(home, "AppData", "Local", "swoomps")
 	}
 	return filepath.Join(home, ".local", "share", "swoomps")
 }

@@ -47,6 +47,8 @@ type Server struct {
 	SamplePlayers   []SamplePlayer `json:"sample_players,omitempty"`
 	QueryEnabled    bool           `json:"query_enabled"`
 	Plugins         []Plugin       `json:"plugins,omitempty"`
+	Map             string         `json:"map,omitempty"`
+	GameType        string         `json:"gametype,omitempty"`
 	Country         string         `json:"country,omitempty"`
 	RawQuery        string         `json:"raw_query,omitempty"`
 	ProbeKind       string         `json:"probe_kind,omitempty"`

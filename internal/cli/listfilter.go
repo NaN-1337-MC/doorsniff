@@ -96,9 +96,15 @@ func parsePlayerClause(s string) (PlayerClause, error) {
 	return c, nil
 }
 
-// ToSQL returns a SQL fragment and args for the WHERE clause.
-// The fragment uses OR between clauses and is wrapped in parens.
+// ToSQL returns a SQL fragment and args for the WHERE clause
+// targeting the num_players column.
 func (f PlayerFilter) ToSQL() (string, []any) {
+	return f.ToSQLColumn("num_players")
+}
+
+// ToSQLColumn returns a SQL fragment and args for the WHERE clause
+// targeting the given column name.
+func (f PlayerFilter) ToSQLColumn(column string) (string, []any) {
 	if len(f.Clauses) == 0 {
 		return "", nil
 	}
@@ -107,22 +113,22 @@ func (f PlayerFilter) ToSQL() (string, []any) {
 	for _, c := range f.Clauses {
 		switch c.Op {
 		case "range":
-			parts = append(parts, "(num_players BETWEEN ? AND ?)")
+			parts = append(parts, fmt.Sprintf("(%s BETWEEN ? AND ?)", column))
 			args = append(args, c.Lo, c.Hi)
 		case "=":
-			parts = append(parts, "num_players = ?")
+			parts = append(parts, fmt.Sprintf("%s = ?", column))
 			args = append(args, c.Lo)
 		case ">":
-			parts = append(parts, "num_players > ?")
+			parts = append(parts, fmt.Sprintf("%s > ?", column))
 			args = append(args, c.Lo)
 		case "<":
-			parts = append(parts, "num_players < ?")
+			parts = append(parts, fmt.Sprintf("%s < ?", column))
 			args = append(args, c.Lo)
 		case ">=":
-			parts = append(parts, "num_players >= ?")
+			parts = append(parts, fmt.Sprintf("%s >= ?", column))
 			args = append(args, c.Lo)
 		case "<=":
-			parts = append(parts, "num_players <= ?")
+			parts = append(parts, fmt.Sprintf("%s <= ?", column))
 			args = append(args, c.Lo)
 		}
 	}

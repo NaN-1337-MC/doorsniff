@@ -53,7 +53,7 @@ Commands:
   list                query and display found servers
   scan                long-running scan (em breve)
   tui                 live dashboard (em breve)
-  init                initialize config and database (em breve)
+  init                initialize config and database
   seed                manage seeds (em breve)
   version             print version
 

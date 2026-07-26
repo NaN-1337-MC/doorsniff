@@ -72,12 +72,17 @@ github.com/renanbray/swoomps
 │   │   │   ├── packet.go        # VarInt, string encoding
 │   │   │   ├── parser.go
 │   │   │   ├── legacy.go        # 1.6 ping (RST fallback)
-│   │   │   └── slp.go
-│   │   └── query/               # Query protocol (planned, not wired yet)
-│   │       └── query.go
+│   │   │   ├── slp.go
+│   │   │   └── slptest/         # FakeServer (TCP, modern + legacy)
+│   │   └── query/               # Query protocol (UDP, full stat)
+│   │       ├── query.go         # Query() — handshake + full-stat via UDP
+│   │       ├── response.go      # Response struct, ParseFullStat, ParsePlugins
+│   │       ├── response_test.go
+│   │       ├── query_test.go    # E2E tests with FakeServer
+│   │       └── querytest/       # FakeServer (UDP, handshake + full stat)
 │   ├── storage/                 # SQLite driver + repo
 │   │   ├── sqlite.go            # Open, WAL, Close
-│   │   ├── schema.go            # migrations v1 (servers) and v2 (scan_progress)
+│   │   ├── schema.go            # migrations v1 (servers), v2 (scan_progress), v3 (query fields)
 │   │   └── repo.go              # Upsert, List, ListServersFiltered, GetStats,
 │   │                            #   LoadProgress, SaveProgress
 │   ├── model/                   # domain types

@@ -118,10 +118,50 @@ func (s *Styles) FormatFound(srv model.Server) string {
 		rows = append(rows, r2.String())
 	}
 
+	if srv.Map != "" || srv.GameType != "" {
+		var r3 strings.Builder
+		if srv.Map != "" {
+			r3.WriteString(s.Label.Render("Map:      "))
+			r3.WriteString(s.Value.Render(srv.Map))
+		}
+		if srv.GameType != "" {
+			if r3.Len() > 0 {
+				r3.WriteString(s.Label.Render("    "))
+			}
+			r3.WriteString(s.Label.Render("Mode:     "))
+			r3.WriteString(s.Value.Render(srv.GameType))
+		}
+		rows = append(rows, r3.String())
+	}
+
+	if len(srv.Plugins) > 0 {
+		var r4 strings.Builder
+		r4.WriteString(s.Label.Render("Plugins:  "))
+		plugins := formatPlugins(srv.Plugins)
+		if len(plugins) > 60 {
+			plugins = plugins[:57] + "..."
+		}
+		r4.WriteString(s.Value.Render(plugins))
+		rows = append(rows, r4.String())
+	}
+
 	content := strings.Join(rows, "\n")
 	fmt.Fprintln(&b, s.Card.Render(content))
 	fmt.Fprintln(&b)
 	return b.String()
+}
+
+// formatPlugins renders a plugin list as "Name1 v1; Name2 v2; ..."
+func formatPlugins(plugins []model.Plugin) string {
+	var parts []string
+	for _, p := range plugins {
+		if p.Version != "" {
+			parts = append(parts, p.Name+" "+p.Version)
+		} else {
+			parts = append(parts, p.Name)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // Ticker manages a sticky progress bar at the bottom of the terminal.

@@ -142,7 +142,13 @@ func generateTargets(ctx context.Context, seeds []model.Seed, lo, hi uint16, pro
 	out := make(chan model.Target, 1024)
 	go func() {
 		defer close(out)
+		seen := make(map[string]bool, len(seeds))
 		for _, s := range seeds {
+			if seen[s.Host] {
+				continue
+			}
+			seen[s.Host] = true
+
 			startPort := lo
 			if progress != nil {
 				if lastPort, ok := progress[s.Host]; ok {
@@ -167,13 +173,14 @@ func generateTargets(ctx context.Context, seeds []model.Seed, lo, hi uint16, pro
 			state.CurrentScanned.Store(0)
 
 			var lastPort uint16
-			for p := startPort; p <= hi; p++ {
+			for p := uint32(startPort); p <= uint32(hi); p++ {
+				port := uint16(p)
 				select {
 				case <-ctx.Done():
 					return
-				case out <- model.Target{IP: s.Host, Port: p}:
+				case out <- model.Target{IP: s.Host, Port: port}:
 				}
-				lastPort = p
+				lastPort = port
 				state.CurrentScanned.Add(1)
 			}
 

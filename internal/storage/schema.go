@@ -7,7 +7,7 @@ import (
 
 // currentSchemaVersion is the latest schema version. Bump on every
 // backward-incompatible change and add a new entry to migrations.
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 type migration struct {
 	version int
@@ -20,6 +20,7 @@ type migration struct {
 var migrations = []migration{
 	{version: 1, sql: schemaV1},
 	{version: 2, sql: schemaV2},
+	{version: 3, sql: schemaV3},
 }
 
 const schemaV1 = `
@@ -66,6 +67,11 @@ CREATE TABLE IF NOT EXISTS scan_progress (
   last_port  INTEGER NOT NULL,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+`
+
+const schemaV3 = `
+ALTER TABLE servers ADD COLUMN map       TEXT;
+ALTER TABLE servers ADD COLUMN gametype  TEXT;
 `
 
 // EnsureSchema applies any pending migrations. Safe to call on every

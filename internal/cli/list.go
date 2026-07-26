@@ -27,19 +27,21 @@ func runList(args []string) error {
 	fs.SetOutput(io.Discard)
 
 	var (
-		versionFlag  string
-		engineFlag   string
-		playersFlag  string
-		portFlag     string
-		motdFlag     string
-		sortFlag     string
-		limitFlag    int
-		databaseFlag string
+		versionFlag    string
+		engineFlag     string
+		playersFlag    string
+		maxPlayersFlag string
+		portFlag       string
+		motdFlag       string
+		sortFlag       string
+		limitFlag      int
+		databaseFlag   string
 	)
 
 	fs.StringVar(&versionFlag, "version", "", "filter by version (e.g. 1.21.1 or 1.21.1,26.1.2)")
 	fs.StringVar(&engineFlag, "engine", "", "filter by server engine (e.g. paper, purpur)")
 	fs.StringVar(&playersFlag, "players", "", "filter by player count (e.g. >1, 1-10, <50)")
+	fs.StringVar(&maxPlayersFlag, "maxplayers", "", "filter by max players (e.g. >=100, 50-200)")
 	fs.StringVar(&portFlag, "port", "", "filter by port (e.g. 25565 or 25500-25600)")
 	fs.StringVar(&motdFlag, "motd", "", "search MOTD for keywords")
 	fs.StringVar(&sortFlag, "sort", "recent", "sort by: players, latency, version, port, recent, oldest")
@@ -64,6 +66,12 @@ func runList(args []string) error {
 		return fmt.Errorf("%w", err)
 	}
 	playerSQL, playerArgs := playerFilter.ToSQL()
+
+	maxPlayerFilter, err := ParsePlayerFilter(maxPlayersFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --maxplayers: %w", err)
+	}
+	maxPlayerSQL, maxPlayerArgs := maxPlayerFilter.ToSQLColumn("max_players")
 
 	portLo, portHi, err := ParsePortFilter(portFlag)
 	if err != nil {
@@ -94,15 +102,17 @@ func runList(args []string) error {
 	repo := storage.NewRepository(db)
 
 	query := storage.ListQuery{
-		PlayerSQL:  playerSQL,
-		PlayerArgs: playerArgs,
-		Versions:   versions,
-		Engine:     engineFlag,
-		MOTD:       motdFlag,
-		PortLo:     portLo,
-		PortHi:     portHi,
-		OrderBy:    orderBy,
-		Limit:      limitFlag,
+		PlayerSQL:    playerSQL,
+		PlayerArgs:   playerArgs,
+		MaxPlayerSQL: maxPlayerSQL,
+		MaxPlayerArgs: maxPlayerArgs,
+		Versions:     versions,
+		Engine:       engineFlag,
+		MOTD:         motdFlag,
+		PortLo:       portLo,
+		PortHi:       portHi,
+		OrderBy:      orderBy,
+		Limit:        limitFlag,
 	}
 
 	servers, err := repo.ListServersFiltered(ctx, query)
@@ -199,6 +209,7 @@ func listUsage() string {
 	b.WriteString("  --version VER   filter by version, comma-separated (e.g. 1.21.1,26.1.2)\n")
 	b.WriteString("  --engine ENG    filter by engine, case-insensitive (e.g. paper, purpur)\n")
 	b.WriteString("  --players EXPR  filter by player count (e.g. >1, 1-10, <50)\n")
+	b.WriteString("  --maxplayers EXPR filter by max players (e.g. >=100, 50-200)\n")
 	b.WriteString("  --port PORT     filter by port or range (e.g. 25565 or 25500-25600)\n")
 	b.WriteString("  --motd TEXT     search MOTD for keywords\n")
 	b.WriteString("  --sort KEY      sort by: players, latency, version, port, recent, oldest\n")
