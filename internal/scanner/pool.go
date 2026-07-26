@@ -1,0 +1,297 @@
+package scanner
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
+
+	"github.com/renanbray/swoomps/internal/model"
+	"github.com/renanbray/swoomps/internal/protocol/slp"
+	"github.com/renanbray/swoomps/internal/storage"
+)
+
+// Stats summarises a scan run. Probed counts every target examined;
+// Found counts the targets that responded with a Minecraft server.
+// The counters are atomic so the progress printer can poll them
+// concurrently with the workers.
+type Stats struct {
+	Probed   atomic.Int64
+	Found    atomic.Int64
+	Errors   atomic.Int64
+	Duration time.Duration
+}
+
+// PoolConfig is the configuration for Run. Repo may be nil for
+// dry-runs that only count, but the MVP always passes one.
+type PoolConfig struct {
+	Workers int
+	QPS     int
+	Timeout time.Duration
+	Repo    *storage.Repository
+	Verbose bool
+	ASCII   bool
+
+	Writer  io.Writer // defaults to os.Stdout when nil
+	Styles  *Styles   // defaults to NewStyles(ASCII) when nil
+	Total   int64     // total targets; 0 disables the progress bar
+	PortsLo uint16
+	PortsHi uint16
+}
+
+// Run consumes the target channel and dispatches each target to a
+// worker. Workers run with concurrency limited to cfg.Workers and a
+// global rate limit of cfg.QPS. A single DB writer goroutine drains
+// the result channel and persists servers.
+//
+// When cfg.Total > 0, a background goroutine prints a live progress
+// line every 500ms; the static config header is printed once at the
+// start. Successful discoveries are printed via Styles.RenderFound.
+//
+// On context cancellation, in-flight probes return. Run returns when
+// all workers have exited, the DB writer has drained the result
+// channel, and the progress goroutine has stopped.
+func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stats, error) {
+	start := time.Now()
+
+	if cfg.Workers <= 0 {
+		cfg.Workers = 1
+	}
+	if cfg.QPS <= 0 {
+		cfg.QPS = 1
+	}
+
+	w := cfg.Writer
+	if w == nil {
+		w = os.Stdout
+	}
+	styles := cfg.Styles
+	if styles == nil {
+		styles = NewStyles(cfg.ASCII)
+	}
+
+	limiter := rate.NewLimiter(rate.Limit(cfg.QPS), cfg.QPS)
+	results := make(chan model.Server, 256)
+
+	stats := &Stats{}
+
+	var stopProgress func()
+	if cfg.Total > 0 {
+		prog := &Progress{
+			Total:   cfg.Total,
+			Probed:  &stats.Probed,
+			Found:   &stats.Found,
+			Errors:  &stats.Errors,
+			Started: start,
+			PortsLo: cfg.PortsLo,
+			PortsHi: cfg.PortsHi,
+			QPS:     cfg.QPS,
+			Workers: cfg.Workers,
+			Timeout: cfg.Timeout,
+			Out:     w,
+			Styles:  styles,
+		}
+		stopProgress = prog.Run(500 * time.Millisecond)
+	}
+
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		if cfg.Repo == nil {
+			for range results {
+			}
+			return
+		}
+		for s := range results {
+			if err := cfg.Repo.UpsertServer(ctx, s); err != nil {
+				slog.Warn("upsert failed", "ip", s.IP, "port", s.Port, "err", err)
+			}
+		}
+	}()
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(cfg.Workers)
+
+	for i := 0; i < cfg.Workers; i++ {
+		g.Go(func() error {
+			return runWorker(gctx, targets, limiter, cfg.Timeout, cfg.Verbose, w, styles, results, stats)
+		})
+	}
+
+	workerErr := g.Wait()
+	close(results)
+	<-writerDone
+
+	if stopProgress != nil {
+		stopProgress()
+	}
+
+	stats.Duration = time.Since(start)
+	return *stats, workerErr
+}
+
+// runWorker is the body of one pool worker. It reads targets until the
+// channel is closed or the context is cancelled. When verbose is
+// false, per-target error lines are suppressed — only successful
+// discoveries and the final summary are printed.
+func runWorker(
+	ctx context.Context,
+	targets <-chan model.Target,
+	limiter *rate.Limiter,
+	timeout time.Duration,
+	verbose bool,
+	w io.Writer,
+	styles *Styles,
+	results chan<- model.Server,
+	stats *Stats,
+) error {
+	for {
+		var t model.Target
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case got, ok := <-targets:
+			if !ok {
+				return nil
+			}
+			t = got
+		}
+
+		if err := limiter.Wait(ctx); err != nil {
+			return err
+		}
+
+		stats.Probed.Add(1)
+
+		open, err := Probe(ctx, t.IP, t.Port, timeout)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			stats.Errors.Add(1)
+			slog.Debug("tcp probe error", "ip", t.IP, "port", t.Port, "err", err)
+			if verbose {
+				fmt.Fprintf(w, "[-] %s:%d  tcp error: %v\n", t.IP, t.Port, err)
+			}
+			continue
+		}
+		if !open {
+			continue
+		}
+
+		resp, latency, err := slp.Ping(ctx, t.IP, t.Port, timeout)
+		if err != nil {
+			// If the modern handshake RSTs, fall back to the 1.6
+			// legacy ping. This covers BungeeCord with
+			// ping_passthrough enabled and pre-1.7 servers.
+			var legacy *slp.LegacyResponse
+			var legacyLatency time.Duration
+			var legacyErr error
+			if isConnReset(err) {
+				legacy, legacyLatency, legacyErr = slp.PingLegacy(ctx, t.IP, t.Port, timeout)
+			}
+
+			if legacy != nil && legacyErr == nil {
+				now := time.Now().UTC()
+				s := model.Server{
+					IP:            t.IP,
+					Port:          t.Port,
+					FirstSeen:     now,
+					LastSeen:      now,
+					LastLatencyMs: legacyLatency.Milliseconds(),
+					VersionName:   legacy.Version,
+					MOTD:          legacy.MOTD,
+					NumPlayers:    legacy.NumPlayers,
+					MaxPlayers:    legacy.MaxPlayers,
+					QueryEnabled:  false,
+					ProbeKind:     model.ProbeLegacy,
+				}
+				select {
+				case results <- s:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				stats.Found.Add(1)
+				styles.RenderFound(w, s)
+				continue
+			}
+
+			stats.Errors.Add(1)
+			if verbose {
+				hint := ""
+				switch {
+				case isConnReset(err):
+					hint = " (server RST — likely BungeeCord/proxy, legacy also failed)"
+				case ctx.Err() != nil:
+					hint = " (cancelled)"
+				}
+				fmt.Fprintf(w, "[-] %s:%d  slp failed%s\n", t.IP, t.Port, hint)
+			}
+			slog.Debug("slp error", "ip", t.IP, "port", t.Port, "err", err)
+			continue
+		}
+
+		now := time.Now().UTC()
+		s := model.Server{
+			IP:              t.IP,
+			Port:            t.Port,
+			FirstSeen:       now,
+			LastSeen:        now,
+			LastLatencyMs:   latency.Milliseconds(),
+			VersionProtocol: resp.Version.Protocol,
+			VersionName:     resp.Version.Name,
+			MOTD:            resp.Description,
+			NumPlayers:      resp.Players.Online,
+			MaxPlayers:      resp.Players.Max,
+			SamplePlayers:   toModelSample(resp.Players.Sample),
+			QueryEnabled:    false,
+			ProbeKind:       model.ProbeSLP,
+		}
+
+		select {
+		case results <- s:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		stats.Found.Add(1)
+		styles.RenderFound(w, s)
+	}
+}
+
+func toModelSample(s []slp.SamplePlayer) []model.SamplePlayer {
+	if len(s) == 0 {
+		return nil
+	}
+	out := make([]model.SamplePlayer, 0, len(s))
+	for _, p := range s {
+		out = append(out, model.SamplePlayer{Name: p.Name, ID: p.ID})
+	}
+	return out
+}
+
+// isConnReset returns true when the error chain contains a connection
+// reset (RST). The RST-after-SLP-handshake pattern is the signature
+// of BungeeCord / Velocity proxies that have not enabled
+// ping_passthrough.
+func isConnReset(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	if strings.Contains(err.Error(), "reset by peer") {
+		return true
+	}
+	return false
+}

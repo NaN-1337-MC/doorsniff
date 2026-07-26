@@ -1,0 +1,24 @@
+# Default seeds for swoomps.
+# One host per line. Accepts "hostname", "hostname:port", "ip", or "ip:port".
+# These are well-known public Minecraft servers used as starting points for
+# the scanner. Add or remove freely.
+mc.hypixel.net
+play.cubecraft.net
+2b2t.org
+play.manacube.net
+mc.hivebedrock.network
+play.pixelmonrealms.com
+mineplex.com
+play.gommehd.net
+play.wynncraft.com
+minecraft.serverjungle.com
+play.extremecraft.net
+play.mc-complex.com
+play.minewind.net
+play.mcpvp.net
+play.cosmic-craft.com
+play.fadecloud.com
+play.pvplegacy.net
+play.minesaga.org
+play.munchiemc.com
+play.vanilla-craft.net

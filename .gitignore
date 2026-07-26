@@ -1,0 +1,22 @@
+# Binaries
+/bin/
+*.exe
+*.test
+*.out
+
+# Local config / data (XDG paths are used by default, but keep these too)
+/config.yaml
+/data/
+/swoomps.db
+/swoomps.db-*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Go workspace
+go.work
+go.work.sum
