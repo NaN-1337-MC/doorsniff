@@ -67,7 +67,7 @@ Out of scope:
 | 8 | Storage | done | upsert with port + probe_kind; `list` with 7 filters |
 | 9 | Polish | done | sticky progress bar, per-IP bar, `--resume`, ASCII mode, seeds.txt population |
 | 10 | TUI dashboard | pending | Bubbletea dashboard behind `swoomps tui` |
-| 11 | Offline-mode detection | pending | Login handshake to detect cracked/premium/whitelisted servers |
+| 11 | Offline-mode detection | done | Login handshake to detect cracked/premium/whitelisted servers |
 
 ## Current focus
 

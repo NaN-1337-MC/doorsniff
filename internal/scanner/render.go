@@ -73,6 +73,9 @@ func NewStyles(ascii bool) *Styles {
 	return s
 }
 
+// Ascii returns true when the palette was created in ASCII-only mode.
+func (s *Styles) Ascii() bool { return s.ascii }
+
 // FormatFound returns a styled "found" block as a string. The address
 // sits on its own line; the metadata follows in a bordered card.
 func (s *Styles) FormatFound(srv model.Server) string {

@@ -14,16 +14,18 @@ import (
 // caller before calling RunScan; the scanner does not read from the
 // filesystem.
 type Options struct {
-	Workers int
-	QPS     int
-	Timeout time.Duration // per-probe timeout; 0 = default (1s)
-	PortsLo uint16
-	PortsHi uint16
-	Repo    *storage.Repository
-	Seeds   []model.Seed
-	Verbose bool
-	ASCII   bool
-	Resume  bool
+	Workers   int
+	QPS       int
+	Timeout   time.Duration // per-probe timeout; 0 = default (1s)
+	PortsLo   uint16
+	PortsHi   uint16
+	Repo      *storage.Repository
+	Seeds     []model.Seed
+	Verbose   bool
+	ASCII     bool
+	Resume    bool
+	Login     bool
+	LoginUser string
 }
 
 // RunScan takes already-resolved seeds, generates targets across
@@ -59,16 +61,18 @@ func RunScan(ctx context.Context, opts Options) (*Stats, error) {
 	targets := generateTargets(ctx, remaining, opts.PortsLo, opts.PortsHi, progress, onSeedDone, state)
 
 	return Run(ctx, PoolConfig{
-		Workers: opts.Workers,
-		QPS:     opts.QPS,
-		Timeout: timeout,
-		Repo:    opts.Repo,
-		Verbose: opts.Verbose,
-		ASCII:   opts.ASCII,
-		Total:   total,
-		PortsLo: opts.PortsLo,
-		PortsHi: opts.PortsHi,
-		State:   state,
+		Workers:   opts.Workers,
+		QPS:       opts.QPS,
+		Timeout:   timeout,
+		Repo:      opts.Repo,
+		Verbose:   opts.Verbose,
+		ASCII:     opts.ASCII,
+		Total:     total,
+		PortsLo:   opts.PortsLo,
+		PortsHi:   opts.PortsHi,
+		State:     state,
+		Login:     opts.Login,
+		LoginUser: opts.LoginUser,
 	}, targets)
 }
 

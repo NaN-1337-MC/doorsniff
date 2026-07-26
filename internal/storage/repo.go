@@ -76,12 +76,13 @@ INSERT INTO servers (
   ip, port, first_seen, last_seen, last_latency_ms,
   version_protocol, version_name, motd,
   num_players, max_players, sample_players,
-  query_enabled, plugins, map, gametype, country, raw_query, probe_kind
+  query_enabled, plugins, map, gametype, country, raw_query, probe_kind,
+  login_mode
 ) VALUES (
   ?, ?, ?, ?, ?,
   ?, ?, ?,
   ?, ?, ?,
-  ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT (ip, port) DO UPDATE SET
   last_seen       = excluded.last_seen,
@@ -98,7 +99,8 @@ ON CONFLICT (ip, port) DO UPDATE SET
   gametype        = excluded.gametype,
   country         = excluded.country,
   raw_query       = excluded.raw_query,
-  probe_kind      = excluded.probe_kind;
+  probe_kind      = excluded.probe_kind,
+  login_mode      = excluded.login_mode;
 `
 
 	_, err = r.db.conn.ExecContext(ctx, q,
@@ -120,6 +122,7 @@ ON CONFLICT (ip, port) DO UPDATE SET
 		nullableString(s.Country),
 		nullableString(s.RawQuery),
 		nullableString(s.ProbeKind),
+		nullableString(s.LoginMode),
 	)
 	if err != nil {
 		return fmt.Errorf("upserting server %s: %w", s.Address(), err)
@@ -175,7 +178,8 @@ func (r *Repository) ListServers(ctx context.Context, opts ListOptions) ([]model
 SELECT ip, port, first_seen, last_seen, last_latency_ms,
        version_protocol, version_name, motd,
        num_players, max_players, sample_players,
-       query_enabled, plugins, map, gametype, country, raw_query, probe_kind
+       query_enabled, plugins, map, gametype, country, raw_query, probe_kind,
+       login_mode
 FROM servers%s
 ORDER BY %s
 LIMIT ? OFFSET ?;
@@ -214,6 +218,7 @@ type ListQuery struct {
 	Versions      []string // version substrings to match (OR'd)
 	Engine        string   // engine substring (case-insensitive LIKE)
 	MOTD          string   // MOTD substring (case-insensitive LIKE)
+	LoginMode     string   // login mode exact match (cracked, premium, whitelist, banned, kicked, full)
 	PortLo        uint16   // 0 = no filter
 	PortHi        uint16   // 0 = no filter
 	OrderBy       string   // SQL ORDER BY fragment, default "last_seen DESC"
@@ -268,6 +273,12 @@ func (r *Repository) ListServersFiltered(ctx context.Context, q ListQuery) ([]mo
 		args = append(args, "%"+strings.ToLower(q.MOTD)+"%")
 	}
 
+	// Login mode filter.
+	if q.LoginMode != "" {
+		conds = append(conds, "login_mode = ?")
+		args = append(args, q.LoginMode)
+	}
+
 	// Port filter.
 	if q.PortLo != 0 && q.PortHi != 0 {
 		if q.PortLo == q.PortHi {
@@ -288,7 +299,8 @@ func (r *Repository) ListServersFiltered(ctx context.Context, q ListQuery) ([]mo
 SELECT ip, port, first_seen, last_seen, last_latency_ms,
        version_protocol, version_name, motd,
        num_players, max_players, sample_players,
-       query_enabled, plugins, map, gametype, country, raw_query, probe_kind
+       query_enabled, plugins, map, gametype, country, raw_query, probe_kind,
+       login_mode
 FROM servers%s
 ORDER BY %s
 LIMIT ?;
@@ -412,6 +424,8 @@ type rowScanner interface {
 
 func scanServer(rs rowScanner) (model.Server, error) {
 	var (
+		ipRaw      sql.NullString
+		portRaw    sql.NullInt64
 		s          model.Server
 		versionPr  sql.NullInt64
 		versionNm  sql.NullString
@@ -419,19 +433,21 @@ func scanServer(rs rowScanner) (model.Server, error) {
 		numPl      sql.NullInt64
 		maxPl      sql.NullInt64
 		sampleRaw  sql.NullString
+		queryEna   sql.NullBool
 		pluginsRaw sql.NullString
 		mapName    sql.NullString
 		gametype   sql.NullString
 		country    sql.NullString
 		rawQuery   sql.NullString
 		probeKind  sql.NullString
+		loginMode  sql.NullString
 		latency    sql.NullInt64
 		firstSeen  time.Time
 		lastSeen   time.Time
 	)
 	if err := rs.Scan(
-		&s.IP,
-		&s.Port,
+		&ipRaw,
+		&portRaw,
 		&firstSeen,
 		&lastSeen,
 		&latency,
@@ -441,16 +457,25 @@ func scanServer(rs rowScanner) (model.Server, error) {
 		&numPl,
 		&maxPl,
 		&sampleRaw,
-		&s.QueryEnabled,
+		&queryEna,
 		&pluginsRaw,
 		&mapName,
 		&gametype,
 		&country,
 		&rawQuery,
 		&probeKind,
+		&loginMode,
 	); err != nil {
 		return s, err
 	}
+	if !ipRaw.Valid || ipRaw.String == "" {
+		return s, fmt.Errorf("corrupted row: ip is NULL or empty (data integrity violation)")
+	}
+	if !portRaw.Valid || portRaw.Int64 == 0 {
+		return s, fmt.Errorf("corrupted row: port is NULL or 0 (data integrity violation)")
+	}
+	s.IP = ipRaw.String
+	s.Port = uint16(portRaw.Int64)
 	s.FirstSeen = firstSeen
 	s.LastSeen = lastSeen
 	if latency.Valid {
@@ -470,6 +495,9 @@ func scanServer(rs rowScanner) (model.Server, error) {
 	if sampleRaw.Valid && sampleRaw.String != "" {
 		_ = json.Unmarshal([]byte(sampleRaw.String), &s.SamplePlayers)
 	}
+	if queryEna.Valid {
+		s.QueryEnabled = queryEna.Bool
+	}
 	if pluginsRaw.Valid && pluginsRaw.String != "" {
 		_ = json.Unmarshal([]byte(pluginsRaw.String), &s.Plugins)
 	}
@@ -478,6 +506,7 @@ func scanServer(rs rowScanner) (model.Server, error) {
 	s.Country = country.String
 	s.RawQuery = rawQuery.String
 	s.ProbeKind = probeKind.String
+	s.LoginMode = loginMode.String
 	return s, nil
 }
 
@@ -533,6 +562,17 @@ ON CONFLICT (seed_ip) DO UPDATE SET
 `
 	if _, err := r.db.conn.ExecContext(ctx, q, seedIP, lastPort); err != nil {
 		return fmt.Errorf("saving progress for %s: %w", seedIP, err)
+	}
+	return nil
+}
+
+// UpdateLoginMode updates only the login_mode column for an existing server.
+func (r *Repository) UpdateLoginMode(ctx context.Context, ip string, port uint16, mode string) error {
+	const q = `
+UPDATE servers SET login_mode = ? WHERE ip = ? AND port = ?;
+`
+	if _, err := r.db.conn.ExecContext(ctx, q, nullableString(mode), ip, port); err != nil {
+		return fmt.Errorf("updating login_mode for %s:%d: %w", ip, port, err)
 	}
 	return nil
 }

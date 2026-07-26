@@ -21,20 +21,22 @@ import (
 
 // probeConfig is the fully-resolved configuration for a single
 // `swoomps probe` invocation. It is the result of merging CLI
-// flags, environment, and the user config file, and is the input
+// flags, environment, and the user config file, and the input
 // to the rest of the probe pipeline.
 type probeConfig struct {
-	portsLo  uint16
-	portsHi  uint16
-	qps      int
-	workers  int
-	timeout  time.Duration
-	verbose  bool
-	ascii    bool
-	resume   bool
-	fileFlag string
-	seedsDir string
-	dbPath   string
+	portsLo     uint16
+	portsHi     uint16
+	qps         int
+	workers     int
+	timeout     time.Duration
+	verbose     bool
+	ascii       bool
+	resume      bool
+	fileFlag    string
+	seedsDir    string
+	dbPath      string
+	login       bool
+	loginUser   string
 }
 
 // runProbe is the entry point for `swoomps probe`. It loads config,
@@ -86,6 +88,8 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 		seedsFlag        string
 		fileFlag         string
 		resumeFlag       bool
+		loginFlag        bool
+		loginUserFlag    string
 	)
 	fs.StringVar(&portsFlag, "ports", "1-65535", "port range, e.g. 25565, 25500-25600, 1-65535")
 	fs.IntVar(&qpsFlag, "qps", 200, "global QPS limit")
@@ -98,6 +102,8 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	fs.StringVar(&seedsFlag, "seeds", "", "override seeds directory")
 	fs.StringVar(&fileFlag, "file", "", "read seeds from a single file instead of the seeds directory")
 	fs.BoolVar(&resumeFlag, "resume", false, "skip seeds that were fully scanned in a previous run")
+	fs.BoolVar(&loginFlag, "login", false, "perform login handshake to detect online/offline mode")
+	fs.StringVar(&loginUserFlag, "login-user", "Herobrine", "username for login handshake")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -127,17 +133,19 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	}
 
 	return &probeConfig{
-		portsLo:  lo,
-		portsHi:  hi,
-		qps:      qpsFlag,
-		workers:  workersFlag,
-		timeout:  timeoutFlag,
-		verbose:  verboseFlag || verboseShortFlag,
-		ascii:    asciiFlag,
-		resume:   resumeFlag,
-		fileFlag: fileFlag,
-		seedsDir: seedsDir,
-		dbPath:   dbPath,
+		portsLo:   lo,
+		portsHi:   hi,
+		qps:       qpsFlag,
+		workers:   workersFlag,
+		timeout:   timeoutFlag,
+		verbose:   verboseFlag || verboseShortFlag,
+		ascii:     asciiFlag,
+		resume:    resumeFlag,
+		fileFlag:  fileFlag,
+		seedsDir:  seedsDir,
+		dbPath:    dbPath,
+		login:     loginFlag,
+		loginUser: loginUserFlag,
 	}, nil
 }
 
@@ -201,16 +209,18 @@ func runAndSummarize(w io.Writer, pc *probeConfig, repo *storage.Repository) *sc
 	}
 
 	stats, err := scanner.RunScan(ctx, scanner.Options{
-		Workers: pc.workers,
-		QPS:     pc.qps,
-		Timeout: pc.timeout,
-		PortsLo: pc.portsLo,
-		PortsHi: pc.portsHi,
-		Repo:    repo,
-		Seeds:   seeds,
-		Verbose: pc.verbose,
-		ASCII:   pc.ascii,
-		Resume:  pc.resume,
+		Workers:   pc.workers,
+		QPS:       pc.qps,
+		Timeout:   pc.timeout,
+		PortsLo:   pc.portsLo,
+		PortsHi:   pc.portsHi,
+		Repo:      repo,
+		Seeds:     seeds,
+		Verbose:   pc.verbose,
+		ASCII:     pc.ascii,
+		Resume:    pc.resume,
+		Login:     pc.login,
+		LoginUser: pc.loginUser,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "[ERROR] scanner: %v\n", err)
@@ -282,6 +292,8 @@ func probeUsage() string {
 	b.WriteString("  --database PATH     override database path\n")
 	b.WriteString("  --verbose, -v       show per-target error lines (timeouts, SLP failures)\n")
 	b.WriteString("  --ascii             plain output (no colour, ASCII border and bar)\n")
+	b.WriteString("  --login             perform login handshake to detect online/offline mode\n")
+	b.WriteString("  --login-user STR    username for login handshake (default Herobrine)\n")
 	return b.String()
 }
 

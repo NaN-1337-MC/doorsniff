@@ -16,6 +16,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/renanbray/swoomps/internal/model"
+	"github.com/renanbray/swoomps/internal/protocol/login"
 	"github.com/renanbray/swoomps/internal/protocol/query"
 	"github.com/renanbray/swoomps/internal/protocol/slp"
 	"github.com/renanbray/swoomps/internal/storage"
@@ -47,6 +48,12 @@ type PoolConfig struct {
 	Total   int64     // total targets; 0 disables the progress bar
 	PortsLo uint16
 	PortsHi uint16
+
+	// Login, when true, performs a login handshake after successful
+	// SLP to determine online/offline mode.
+	Login   bool
+	// LoginUser is the username sent in the Login Start packet.
+	LoginUser string
 
 	// State is the shared progress state. It must be the same
 	// instance passed to generateTargets (or NewProgressState when
@@ -162,6 +169,8 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (*Sta
 			tick:          cfg.Ticker,
 			state:         state,
 			processedHook: cfg.ProcessedHook,
+			login:         cfg.Login,
+			loginUser:     cfg.LoginUser,
 		}
 		g.Go(func() error {
 			return wk.run(gctx)
@@ -200,6 +209,8 @@ type worker struct {
 	tick          *Ticker
 	state         *ProgressState
 	processedHook func(model.Target)
+	login         bool
+	loginUser     string
 }
 
 // run reads targets until the channel is closed or the context is
@@ -345,38 +356,49 @@ func (wk *worker) processTarget(ctx context.Context, t model.Target) {
 	wk.stats.Found.Add(1)
 	wk.printFound(s)
 
-	// Enrich with Query data (UDP) in the background. Query must be
-	// explicitly enabled on the server, so a failure here is expected
-	// and not an error. The enriched result is re-sent to the results
-	// channel so the DB gets the full picture on the next upsert.
+	// Enrich with Query data (UDP) and optionally with login handshake
+	// in the background. Both are best-effort enrichments; failures are
+	// expected when the server does not have those features enabled.
+	// The last write to the results channel is what gets persisted.
 	go func() {
 		if ctx.Err() != nil {
 			return
 		}
 		qr, _, qerr := query.Query(ctx, t.IP, t.Port, wk.timeout)
-		if qerr != nil {
-			return
-		}
-		s.QueryEnabled = true
-		s.Map = qr.Map
-		s.GameType = qr.GameType
-		s.RawQuery = qr.Plugins
-		if plugins := query.ParsePlugins(qr.Plugins); len(plugins) > 0 {
-			s.Plugins = make([]model.Plugin, len(plugins))
-			for i, p := range plugins {
-				s.Plugins[i] = model.Plugin{Name: p.Name, Version: p.Version}
+		if qerr == nil {
+			s.QueryEnabled = true
+			s.Map = qr.Map
+			s.GameType = qr.GameType
+			s.RawQuery = qr.Plugins
+			if plugins := query.ParsePlugins(qr.Plugins); len(plugins) > 0 {
+				s.Plugins = make([]model.Plugin, len(plugins))
+				for i, p := range plugins {
+					s.Plugins[i] = model.Plugin{Name: p.Name, Version: p.Version}
+				}
+			}
+			if len(qr.PlayerNames) > 0 && len(s.SamplePlayers) == 0 {
+				s.SamplePlayers = make([]model.SamplePlayer, len(qr.PlayerNames))
+				for i, name := range qr.PlayerNames {
+					s.SamplePlayers[i] = model.SamplePlayer{Name: name}
+				}
+			}
+			s.ProbeKind = model.ProbeSLPAndQ
+			select {
+			case wk.results <- s:
+			case <-ctx.Done():
+				return
 			}
 		}
-		if len(qr.PlayerNames) > 0 && len(s.SamplePlayers) == 0 {
-			s.SamplePlayers = make([]model.SamplePlayer, len(qr.PlayerNames))
-			for i, name := range qr.PlayerNames {
-				s.SamplePlayers[i] = model.SamplePlayer{Name: name}
+
+		if wk.login {
+			loginres, lerr := login.Handshake(ctx, t.IP, t.Port, wk.timeout, wk.loginUser)
+			if lerr == nil && loginres != nil {
+				s.LoginMode = loginres.Mode.String()
+				select {
+				case wk.results <- s:
+				case <-ctx.Done():
+				}
 			}
-		}
-		s.ProbeKind = model.ProbeSLPAndQ
-		select {
-		case wk.results <- s:
-		case <-ctx.Done():
 		}
 	}()
 }

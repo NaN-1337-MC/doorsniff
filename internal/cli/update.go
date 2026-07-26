@@ -10,13 +10,19 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 	"github.com/renanbray/swoomps/internal/config"
 	"github.com/renanbray/swoomps/internal/model"
+	"github.com/renanbray/swoomps/internal/protocol/login"
 	"github.com/renanbray/swoomps/internal/protocol/query"
 	"github.com/renanbray/swoomps/internal/protocol/slp"
+	"github.com/renanbray/swoomps/internal/scanner"
 	"github.com/renanbray/swoomps/internal/storage"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
@@ -38,6 +44,9 @@ func runUpdate(args []string) error {
 		timeoutFlag   time.Duration
 		limitFlag     int
 		databaseFlag  string
+		loginFlag     bool
+		loginUserFlag string
+		asciiFlag     bool
 	)
 
 	fs.StringVar(&versionFlag, "version", "", "filter by version (e.g. 1.21.1)")
@@ -51,6 +60,9 @@ func runUpdate(args []string) error {
 	fs.DurationVar(&timeoutFlag, "timeout", 3*time.Second, "per-probe timeout")
 	fs.IntVar(&limitFlag, "limit", 0, "max servers to update (0 = all)")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
+	fs.BoolVar(&loginFlag, "login", false, "perform login handshake to detect online/offline mode")
+	fs.StringVar(&loginUserFlag, "login-user", "Herobrine", "username for login handshake")
+	fs.BoolVar(&asciiFlag, "ascii", false, "plain output (no colour, ASCII border and bar)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -124,7 +136,28 @@ func runUpdate(args []string) error {
 		return nil
 	}
 
-	fmt.Printf("updating %d server(s)...\n", len(servers))
+	ascii := asciiFlag
+	styles := scanner.NewStyles(ascii)
+
+	start := time.Now()
+	ustats := &updateStats{
+		checked: atomic.Int64{},
+		changed: atomic.Int64{},
+	}
+	state := scanner.NewProgressState()
+
+	uprog := &updateProgress{
+		Total:   int64(len(servers)),
+		Checked: &ustats.checked,
+		Changed: &ustats.changed,
+		Started: start,
+		Out:     os.Stdout,
+		Styles:  styles,
+		State:   state,
+	}
+
+	ticker := newUpdateTicker(uprog)
+	ticker.Start(500 * time.Millisecond)
 
 	limiter := rate.NewLimiter(rate.Limit(qpsFlag), qpsFlag)
 
@@ -133,45 +166,461 @@ func runUpdate(args []string) error {
 
 	for i := range servers {
 		srv := servers[i]
-		g.Go(func() error {
-			select {
-			case <-gctx.Done():
-				return gctx.Err()
-			default:
-			}
+		g.Go(func(srv model.Server) func() error {
+			return func() error {
+				select {
+				case <-gctx.Done():
+					return gctx.Err()
+				default:
+				}
 
-			if err := limiter.Wait(gctx); err != nil {
-				return err
-			}
+				if err := limiter.Wait(gctx); err != nil {
+					return err
+				}
 
-			s, err := probeServer(gctx, srv.IP, srv.Port, timeoutFlag)
+				addr := fmt.Sprintf("%s:%d", srv.IP, srv.Port)
+				addrPtr := new(string)
+				*addrPtr = addr
+				state.Current.Store(addrPtr)
+
+			s, err := probeServer(gctx, srv.IP, srv.Port, timeoutFlag, loginFlag, loginUserFlag)
 			if err != nil {
+				ustats.checked.Add(1)
 				return nil
 			}
 
 			s.FirstSeen = srv.FirstSeen
 			if err := repo.UpsertServer(gctx, s); err != nil {
+				ustats.checked.Add(1)
 				return nil
 			}
 
-			return nil
-		})
+			ustats.checked.Add(1)
+
+			if hasChanges(srv, s) {
+				ustats.changed.Add(1)
+				block := formatServerChanged(srv, s, styles)
+				ticker.InsertAbove(block)
+			}
+
+				return nil
+			}
+		}(srv))
 	}
 
 	if err := g.Wait(); err != nil {
 		if ctx.Err() != nil {
+			ticker.Stop()
 			fmt.Println("\nupdate interrupted.")
+			return nil
 		}
 	}
 
-	fmt.Printf("\nupdate complete. checked %d server(s).\n", len(servers))
+	ticker.Stop()
+
+	duration := time.Since(start)
+	pps := 0.0
+	if duration > 0 {
+		pps = float64(ustats.checked.Load()) / duration.Seconds()
+	}
+
+	fmt.Printf("\n")
+	printUpdateSummary(os.Stdout, ustats, duration, pps, styles)
 	return nil
 }
 
-func probeServer(ctx context.Context, host string, port uint16, timeout time.Duration) (model.Server, error) {
+type updateStats struct {
+	checked atomic.Int64
+	changed atomic.Int64
+}
+
+type updateProgress struct {
+	Total   int64
+	Checked *atomic.Int64
+	Changed *atomic.Int64
+	Started time.Time
+	Out     io.Writer
+	Styles  *scanner.Styles
+	State   *scanner.ProgressState
+}
+
+func (p *updateProgress) Header() string {
+	return "[update]"
+}
+
+func (p *updateProgress) Render() string {
+	checked := p.Checked.Load()
+	if checked > p.Total {
+		checked = p.Total
+	}
+	pct := 0.0
+	if p.Total > 0 {
+		pct = float64(checked) / float64(p.Total) * 100
+	}
+	elapsed := time.Since(p.Started)
+	var eta time.Duration
+	if elapsed > 0 && checked > 0 {
+		pps := float64(checked) / elapsed.Seconds()
+		if pps > 0 {
+			eta = time.Duration(float64(p.Total-checked)/pps*float64(time.Second))
+		}
+	}
+
+	const width = 30
+	filledChar, emptyChar := "█", "░"
+	if p.Styles != nil && p.Styles.Ascii() {
+		filledChar, emptyChar = "#", "."
+	}
+
+	filled := int(float64(width) * pct / 100)
+	if filled > width {
+		filled = width
+	}
+	bar := p.Styles.BarFilled.Render(strings.Repeat(filledChar, filled)) +
+		p.Styles.BarEmpty.Render(strings.Repeat(emptyChar, width-filled))
+
+	var seedLabel string
+	if p.State != nil {
+		if cp := p.State.Current.Load(); cp != nil && *cp != "" {
+			seedLabel = *cp
+		}
+	}
+
+	changed := p.Changed.Load()
+	line := fmt.Sprintf("%s  %s  %s  ETA %s  changed=%s",
+		bar,
+		p.Styles.Pct.Render(fmt.Sprintf("%5.1f%%", pct)),
+		p.Styles.Meta.Render(fmt.Sprintf("(%d/%d)", checked, p.Total)),
+		p.Styles.Eta.Render(formatDuration(eta)),
+		p.Styles.Value.Render(fmt.Sprintf("%d", changed)),
+	)
+	if seedLabel != "" {
+		line += "  " + p.Styles.Meta.Render("scanning: ") + p.Styles.Value.Render(seedLabel)
+	}
+	return line
+}
+
+type updateTicker struct {
+	prog *updateProgress
+	out  io.Writer
+	done chan struct{}
+	wg   sync.WaitGroup
+
+	// opCh feeds every output operation to a single writer goroutine.
+	// All cursor movement and printing happens in that goroutine, so
+	// concurrent calls (ticker redraws + workers calling InsertAbove)
+	// cannot interleave their escape codes on the wire.
+	opCh chan tickerOp
+
+	// outFile is kept so the writer goroutine can emit cursor control
+	// codes via raw fmt.Fprintf — termenv adds overhead we don't need.
+	outFile *os.File
+	tty     bool
+}
+
+// tickerOp is one unit of work delivered to the writer goroutine.
+type tickerOp struct {
+	// block is a multi-line card to print above the bar. Empty means
+	// "just refresh the bar".
+	block string
+}
+
+func newUpdateTicker(prog *updateProgress) *updateTicker {
+	var outFile *os.File
+	isTTY := false
+	if f, ok := prog.Out.(*os.File); ok {
+		isTTY = term.IsTerminal(f.Fd())
+		outFile = f
+	}
+	return &updateTicker{
+		prog:    prog,
+		out:     os.Stdout,
+		done:    make(chan struct{}),
+		opCh:    make(chan tickerOp, 128),
+		outFile: outFile,
+		tty:     isTTY,
+	}
+}
+
+func (t *updateTicker) Start(interval time.Duration) {
+	// Header sits above the bar; together they form the initial sticky
+	// block. We do not use SaveCursorPosition because cursor save/restore
+	// is unreliable across terminals and tends to drift after many writes.
+	fmt.Fprintln(t.out, t.prog.Header())
+	fmt.Fprintln(t.out, t.prog.Render())
+
+	t.wg.Add(2)
+
+	// Single writer goroutine. Every escape sequence — cursor up,
+	// clear line, block text, bar — flows through this goroutine in
+	// order, so there is zero interleaving.
+	go func() {
+		defer t.wg.Done()
+		for op := range t.opCh {
+			t.handle(op)
+		}
+	}()
+
+	// Periodic redraw: just pushes an empty op so the writer repaints
+	// the bar with the latest counters.
+	go func() {
+		defer t.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-t.done:
+				return
+			case <-ticker.C:
+				select {
+				case t.opCh <- tickerOp{}:
+				case <-t.done:
+					return
+				}
+			}
+		}
+	}()
+}
+
+// handle emits one block + bar reprint under the single-writer invariant.
+//
+// TTY layout maintained:
+//   - The bar is always exactly 1 line above the cursor (i.e. the last
+//     line printed before this call ended).
+//   - To insert a block: move up 1 line (to the bar), clear that line,
+//     then write the block, then write the bar. The block now occupies
+//     the bar's old row; the bar moves down with the cursor.
+//   - On a refresh op (empty block), still move up 1 and clear so the
+//     bar is replaced in place instead of stacking new lines.
+func (t *updateTicker) handle(op tickerOp) {
+	if !t.tty {
+		if op.block != "" {
+			_, _ = io.WriteString(t.outFile, op.block)
+		}
+		return
+	}
+	if op.block == "" {
+		// Refresh tick: cursor sits 1 line below the bar. Move up,
+		// clear that line, then redraw the bar in the same row.
+		_, _ = io.WriteString(t.outFile, "\x1b[1A\x1b[2K")
+	} else {
+		// Insert: same cursor up + clear, then write the block. The
+		// block now occupies the bar's old row; the bar moves down
+		// by len(block).
+		_, _ = io.WriteString(t.outFile, "\x1b[1A\x1b[2K")
+		_, _ = io.WriteString(t.outFile, op.block)
+	}
+	_, _ = io.WriteString(t.outFile, t.prog.Render())
+	_, _ = io.WriteString(t.outFile, "\n")
+}
+
+func (t *updateTicker) InsertAbove(block string) {
+	if block == "" {
+		return
+	}
+	if !t.tty {
+		_, _ = io.WriteString(t.outFile, block)
+		return
+	}
+	select {
+	case t.opCh <- tickerOp{block: block}:
+	case <-t.done:
+	}
+}
+
+func (t *updateTicker) Stop() {
+	close(t.done)
+	t.wg.Wait()
+}
+
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0:00"
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	s := int(d.Seconds()) % 60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%d:%02d", m, s)
+}
+
+func hasChanges(old, new model.Server) bool {
+	return old.VersionName != new.VersionName ||
+		old.MOTD != new.MOTD ||
+		old.LoginMode != new.LoginMode ||
+		old.Map != new.Map ||
+		old.GameType != new.GameType ||
+		!samePlugins(old.Plugins, new.Plugins)
+}
+
+func samePlugins(a, b []model.Plugin) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].Version != b[i].Version {
+			return false
+		}
+	}
+	return true
+}
+
+func formatServerChanged(old, new model.Server, styles *scanner.Styles) string {
+	var b strings.Builder
+
+	green := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
+
+	ipStyle := styles.IPIdle
+	if new.NumPlayers > 0 {
+		ipStyle = styles.IPActive
+	}
+
+	fmt.Fprint(&b, styles.FoundPrefix.Render("[~] "))
+	fmt.Fprint(&b, ipStyle.Render(new.Address()))
+	fmt.Fprintln(&b)
+
+	var rows []string
+
+	var r1 strings.Builder
+	r1.WriteString(styles.Label.Render("Version:  "))
+	if old.VersionName != new.VersionName {
+		r1.WriteString(green.Render(new.VersionName))
+	} else {
+		r1.WriteString(styles.Value.Render(new.VersionName))
+	}
+	if new.VersionProtocol != 0 {
+		r1.WriteString(styles.Label.Render("  (proto "))
+		if old.VersionProtocol != new.VersionProtocol {
+			r1.WriteString(green.Render(fmt.Sprintf("%d", new.VersionProtocol)))
+		} else {
+			r1.WriteString(styles.Value.Render(fmt.Sprintf("%d", new.VersionProtocol)))
+		}
+		r1.WriteString(styles.Label.Render(")"))
+	}
+	r1.WriteString(styles.Label.Render("    Players:  "))
+	r1.WriteString(styles.Value.Render(fmt.Sprintf("%d/%d", new.NumPlayers, new.MaxPlayers)))
+	r1.WriteString(styles.Label.Render("    Latency:  "))
+	r1.WriteString(styles.Value.Render(fmt.Sprintf("%dms", new.LastLatencyMs)))
+	if new.ProbeKind != "" {
+		r1.WriteString(styles.Label.Render("    Kind:  "))
+		r1.WriteString(styles.Value.Render(new.ProbeKind))
+	}
+	rows = append(rows, r1.String())
+
+	if new.MOTD != "" {
+		motd := new.MOTD
+		if len(motd) > 70 {
+			motd = motd[:67] + "..."
+		}
+		var r2 strings.Builder
+		r2.WriteString(styles.Label.Render("MOTD:     "))
+		if old.MOTD != new.MOTD {
+			r2.WriteString(green.Render(motd))
+		} else {
+			r2.WriteString(styles.Value.Render(motd))
+		}
+		rows = append(rows, r2.String())
+	}
+
+	if new.Map != "" || new.GameType != "" {
+		var r3 strings.Builder
+		if new.Map != "" {
+			r3.WriteString(styles.Label.Render("Map:      "))
+			if old.Map != new.Map {
+				r3.WriteString(green.Render(new.Map))
+			} else {
+				r3.WriteString(styles.Value.Render(new.Map))
+			}
+		}
+		if new.GameType != "" {
+			if r3.Len() > 0 {
+				r3.WriteString(styles.Label.Render("    "))
+			}
+			r3.WriteString(styles.Label.Render("Mode:     "))
+			if old.GameType != new.GameType {
+				r3.WriteString(green.Render(new.GameType))
+			} else {
+				r3.WriteString(styles.Value.Render(new.GameType))
+			}
+		}
+		rows = append(rows, r3.String())
+	}
+
+	if len(new.Plugins) > 0 {
+		var r4 strings.Builder
+		r4.WriteString(styles.Label.Render("Plugins:  "))
+		plugins := formatPlugins(new.Plugins)
+		if len(plugins) > 60 {
+			plugins = plugins[:57] + "..."
+		}
+		if !samePlugins(old.Plugins, new.Plugins) {
+			r4.WriteString(green.Render(plugins))
+		} else {
+			r4.WriteString(styles.Value.Render(plugins))
+		}
+		rows = append(rows, r4.String())
+	}
+
+	if new.LoginMode != "" {
+		var r5 strings.Builder
+		r5.WriteString(styles.Label.Render("Login:    "))
+		if old.LoginMode != new.LoginMode {
+			r5.WriteString(green.Render(loginModeLabel(new.LoginMode)))
+		} else {
+			r5.WriteString(styles.Value.Render(loginModeLabel(new.LoginMode)))
+		}
+		rows = append(rows, r5.String())
+	}
+
+	content := strings.Join(rows, "\n")
+	fmt.Fprintln(&b, styles.Card.Render(content))
+	fmt.Fprintln(&b)
+	return b.String()
+}
+
+func formatPlugins(plugins []model.Plugin) string {
+	var parts []string
+	for _, p := range plugins {
+		if p.Version != "" {
+			parts = append(parts, p.Name+" "+p.Version)
+		} else {
+			parts = append(parts, p.Name)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func printUpdateSummary(w io.Writer, stats *updateStats, d time.Duration, pps float64, styles *scanner.Styles) {
+	ruleStyle := styles.Meta
+	rule := ruleStyle.Render(strings.Repeat("─", 56))
+
+	fmt.Fprintln(w, rule)
+	fmt.Fprintf(w, "%s\n", styles.Pct.Render("  Update Summary"))
+	fmt.Fprintln(w, rule)
+
+	rows := [][2]string{
+		{"Checked", fmt.Sprintf("%d", stats.checked.Load())},
+		{"Changed", fmt.Sprintf("%d", stats.changed.Load())},
+		{"Duration", d.Round(time.Second).String()},
+		{"Throughput", fmt.Sprintf("%.1f pps", pps)},
+	}
+	for _, r := range rows {
+		fmt.Fprintf(w, "  %s  %s\n",
+			styles.Label.Render(fmt.Sprintf("%-10s", r[0]+":")),
+			styles.Value.Render(r[1]))
+	}
+	fmt.Fprintln(w, rule)
+}
+
+func probeServer(ctx context.Context, host string, port uint16, timeout time.Duration, doLogin bool, loginUser string) (model.Server, error) {
 	open, err := probe(ctx, host, port, timeout)
-	if err != nil || !open {
+	if err != nil {
 		return model.Server{}, err
+	}
+	if !open {
+		return model.Server{}, fmt.Errorf("port closed")
 	}
 
 	resp, latency, err := slp.Ping(ctx, host, port, timeout)
@@ -240,6 +689,13 @@ func probeServer(ctx context.Context, host string, port uint16, timeout time.Dur
 		s.ProbeKind = model.ProbeSLPAndQ
 	}
 
+	if doLogin {
+		lr, lerr := login.Handshake(ctx, host, port, timeout, loginUser)
+		if lerr == nil && lr != nil {
+			s.LoginMode = lr.Mode.String()
+		}
+	}
+
 	return s, nil
 }
 
@@ -281,7 +737,7 @@ func updateUsage() string {
 	b.WriteString("Usage:\n  swoomps update [flags]\n\n")
 	b.WriteString("Flags:\n")
 	b.WriteString("  --version VER    filter by version (e.g. 1.21.1,26.1.2)\n")
-	b.WriteString("  --engine ENG     filter by engine, case-insensitive (e.g. paper, purpur)\n")
+	b.WriteString("  --engine ENG     filter by server engine, case-insensitive (e.g. paper, purpur)\n")
 	b.WriteString("  --players EXPR   filter by player count (e.g. >1, 1-10, <50)\n")
 	b.WriteString("  --maxplayers EXPR filter by max players (e.g. >=100, 50-200)\n")
 	b.WriteString("  --port PORT      filter by port or range (e.g. 25565 or 25500-25600)\n")
@@ -291,10 +747,14 @@ func updateUsage() string {
 	b.WriteString("  --timeout DUR    per-probe timeout (default 3s)\n")
 	b.WriteString("  --limit N        max servers to update (0 = all)\n")
 	b.WriteString("  --database PATH  override database path\n")
+	b.WriteString("  --login          perform login handshake to detect online/offline mode\n")
+	b.WriteString("  --login-user STR username for login handshake (default Herobrine)\n")
+	b.WriteString("  --ascii          plain output (no colour, ASCII border and bar)\n")
 	b.WriteString("\nServers are updated oldest-first (by last_seen).\n")
 	b.WriteString("\nExamples:\n")
 	b.WriteString("  swoomps update\n")
 	b.WriteString("  swoomps update --version=1.21.1 --engine=paper\n")
 	b.WriteString("  swoomps update --players='>0' --maxplayers='>=50'\n")
+	b.WriteString("  swoomps update --login\n")
 	return b.String()
 }

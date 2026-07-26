@@ -18,9 +18,9 @@ import (
 	"github.com/renanbray/swoomps/internal/storage"
 )
 
-var tableHeaders = []string{"ADDRESS", "VERSION", "PLAYERS", "LATENCY", "PORT", "LAST SEEN", "MOTD"}
+var tableHeaders = []string{"ADDRESS", "VERSION", "PLAYERS", "LATENCY", "PORT", "LOGIN", "LAST SEEN", "MOTD"}
 
-var tableWidths = []int{24, 22, 10, 10, 7, 12, 44}
+var tableWidths = []int{22, 20, 10, 9, 7, 10, 12, 36}
 
 func runList(args []string) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
@@ -33,6 +33,7 @@ func runList(args []string) error {
 		maxPlayersFlag string
 		portFlag       string
 		motdFlag       string
+		loginModeFlag  string
 		sortFlag       string
 		limitFlag      int
 		databaseFlag   string
@@ -44,7 +45,8 @@ func runList(args []string) error {
 	fs.StringVar(&maxPlayersFlag, "maxplayers", "", "filter by max players (e.g. >=100, 50-200)")
 	fs.StringVar(&portFlag, "port", "", "filter by port (e.g. 25565 or 25500-25600)")
 	fs.StringVar(&motdFlag, "motd", "", "search MOTD for keywords")
-	fs.StringVar(&sortFlag, "sort", "recent", "sort by: players, latency, version, port, recent, oldest")
+	fs.StringVar(&loginModeFlag, "login", "", "filter by login mode (cracked, premium, whitelist, banned, kicked, full)")
+	fs.StringVar(&sortFlag, "sort", "recent", "sort by: players, latency, version, port, recent, oldest, login")
 	fs.IntVar(&limitFlag, "limit", 50, "max results to show")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
 
@@ -109,6 +111,7 @@ func runList(args []string) error {
 		Versions:     versions,
 		Engine:       engineFlag,
 		MOTD:         motdFlag,
+		LoginMode:    normalizeLoginMode(loginModeFlag),
 		PortLo:       portLo,
 		PortHi:       portHi,
 		OrderBy:      orderBy,
@@ -147,6 +150,7 @@ func printServerTable(w io.Writer, servers []model.Server) {
 			fmt.Sprintf("%d/%d", s.NumPlayers, s.MaxPlayers),
 			fmt.Sprintf("%dms", s.LastLatencyMs),
 			fmt.Sprintf("%d", s.Port),
+			loginModeLabel(s.LoginMode),
 			s.LastSeen.Format("2006-01-02"),
 			motd,
 		}
@@ -178,12 +182,76 @@ func printServerTable(w io.Writer, servers []model.Server) {
 				return s.Foreground(latencyColor(server.LastLatencyMs))
 			}
 
+			// Login column: color by mode.
+			if col == 5 && server.LoginMode != "" {
+				return s.Foreground(loginModeColor(server.LoginMode))
+			}
+
 			return s
 		})
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, t.Render())
 	fmt.Fprintf(w, "  %s\n\n", dimStyle.Render(fmt.Sprintf("%d server(s) found", len(servers))))
+}
+
+func loginModeLabel(mode string) string {
+	switch mode {
+	case "offline":
+		return "cracked"
+	case "online":
+		return "premium"
+	case "whitelisted":
+		return "whitelist"
+	case "banned":
+		return "banned"
+	case "kicked":
+		return "kicked"
+	case "full":
+		return "full"
+	case "disconnect":
+		return "disconnect"
+	default:
+		return "-"
+	}
+}
+
+func normalizeLoginMode(s string) string {
+	switch strings.ToLower(s) {
+	case "cracked", "offline":
+		return "offline"
+	case "premium", "online":
+		return "online"
+	case "whitelist", "whitelisted":
+		return "whitelisted"
+	case "banned", "ban":
+		return "banned"
+	case "kicked", "kick":
+		return "kicked"
+	case "full":
+		return "full"
+	default:
+		return ""
+	}
+}
+
+func loginModeColor(mode string) lipgloss.Color {
+	switch mode {
+	case "offline":
+		return lipgloss.Color("46")
+	case "online":
+		return lipgloss.Color("51")
+	case "whitelisted":
+		return lipgloss.Color("220")
+	case "banned":
+		return lipgloss.Color("196")
+	case "kicked":
+		return lipgloss.Color("214")
+	case "full":
+		return lipgloss.Color("208")
+	default:
+		return lipgloss.Color("245")
+	}
 }
 
 func latencyColor(ms int64) lipgloss.Color {
@@ -212,7 +280,8 @@ func listUsage() string {
 	b.WriteString("  --maxplayers EXPR filter by max players (e.g. >=100, 50-200)\n")
 	b.WriteString("  --port PORT     filter by port or range (e.g. 25565 or 25500-25600)\n")
 	b.WriteString("  --motd TEXT     search MOTD for keywords\n")
-	b.WriteString("  --sort KEY      sort by: players, latency, version, port, recent, oldest\n")
+	b.WriteString("  --login MODE   filter by login mode (cracked, premium, whitelist, banned, kicked, full)\n")
+	b.WriteString("  --sort KEY      sort by: players, latency, version, port, recent, oldest, login\n")
 	b.WriteString("  --limit N       max results (default 50)\n")
 	b.WriteString("  --database PATH override database path\n")
 	b.WriteString("\nPlayer filter operators: =, >, <, >=, <=, - (range)\n")
@@ -220,5 +289,7 @@ func listUsage() string {
 	b.WriteString("  swoomps list\n")
 	b.WriteString("  swoomps list --version=1.21.1 --engine=paper --players='>1'\n")
 	b.WriteString("  swoomps list --players='1-10' --sort=players\n")
+	b.WriteString("  swoomps list --login=cracked\n")
+	b.WriteString("  swoomps list --sort=login\n")
 	return b.String()
 }

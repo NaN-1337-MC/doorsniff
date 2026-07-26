@@ -210,7 +210,9 @@ func ParseSortKey(s string) (string, error) {
 		return "port ASC", nil
 	case "oldest":
 		return "first_seen ASC", nil
+	case "login":
+		return "login_mode ASC", nil
 	default:
-		return "", fmt.Errorf("invalid sort key %q (valid: players, latency, version, port, recent, oldest)", s)
+		return "", fmt.Errorf("invalid sort key %q (valid: players, latency, version, port, recent, oldest, login)", s)
 	}
 }
