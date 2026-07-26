@@ -25,6 +25,8 @@ func Run(args []string) error {
 		return runSeed(rest)
 	case "init":
 		return runInit(rest)
+	case "update":
+		return runUpdate(rest)
 	case "version", "-v", "--version":
 		fmt.Println("swoomps dev (no version yet)")
 		return nil
@@ -51,6 +53,7 @@ Usage:
 Commands:
   probe               scan seeds from the configured directory or a file
   list                query and display found servers
+  update              re-probe known servers to refresh their data
   scan                long-running scan (em breve)
   tui                 live dashboard (em breve)
   init                initialize config and database
@@ -66,6 +69,8 @@ func helpCmd(cmd string) error {
 		fmt.Print(probeUsage())
 	case "list":
 		fmt.Print(listUsage())
+	case "update":
+		fmt.Print(updateUsage())
 	default:
 		fmt.Fprintf(os.Stderr, "no help available for %q\n", cmd)
 	}
