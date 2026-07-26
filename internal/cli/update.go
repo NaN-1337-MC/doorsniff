@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -46,6 +47,7 @@ func runUpdate(args []string) error {
 		databaseFlag  string
 		loginFlag     bool
 		loginUserFlag string
+		debugLoginFlag bool
 		asciiFlag     bool
 	)
 
@@ -62,6 +64,7 @@ func runUpdate(args []string) error {
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
 	fs.BoolVar(&loginFlag, "login", false, "perform login handshake to detect online/offline mode")
 	fs.StringVar(&loginUserFlag, "login-user", "Herobrine", "username for login handshake")
+	fs.BoolVar(&debugLoginFlag, "debug-login", false, "dump raw login packet bytes + disconnect reasons to stderr (debug)")
 	fs.BoolVar(&asciiFlag, "ascii", false, "plain output (no colour, ASCII border and bar)")
 
 	if err := fs.Parse(args); err != nil {
@@ -70,6 +73,11 @@ func runUpdate(args []string) error {
 			return nil
 		}
 		return fmt.Errorf("parsing flags: %w", err)
+	}
+
+	if debugLoginFlag {
+		handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
+		slog.SetDefault(slog.New(handler))
 	}
 
 	playerFilter, err := ParsePlayerFilter(playersFlag)
@@ -183,7 +191,7 @@ func runUpdate(args []string) error {
 				*addrPtr = addr
 				state.Current.Store(addrPtr)
 
-			s, err := probeServer(gctx, srv.IP, srv.Port, timeoutFlag, loginFlag, loginUserFlag)
+			s, err := probeServer(gctx, srv.IP, srv.Port, timeoutFlag, loginFlag, loginUserFlag, srv.VersionProtocol)
 			if err != nil {
 				ustats.checked.Add(1)
 				return nil
@@ -429,7 +437,12 @@ func (t *updateTicker) InsertAbove(block string) {
 }
 
 func (t *updateTicker) Stop() {
+	// Signal the ticker loop to exit, then close opCh so the writer
+	// goroutine's `range t.opCh` loop terminates. Without closing opCh
+	// the writer goroutine would block forever, leaking and keeping the
+	// process alive after all work is done.
 	close(t.done)
+	close(t.opCh)
 	t.wg.Wait()
 }
 
@@ -614,7 +627,7 @@ func printUpdateSummary(w io.Writer, stats *updateStats, d time.Duration, pps fl
 	fmt.Fprintln(w, rule)
 }
 
-func probeServer(ctx context.Context, host string, port uint16, timeout time.Duration, doLogin bool, loginUser string) (model.Server, error) {
+func probeServer(ctx context.Context, host string, port uint16, timeout time.Duration, doLogin bool, loginUser string, protoVersion int) (model.Server, error) {
 	open, err := probe(ctx, host, port, timeout)
 	if err != nil {
 		return model.Server{}, err
@@ -690,8 +703,15 @@ func probeServer(ctx context.Context, host string, port uint16, timeout time.Dur
 	}
 
 	if doLogin {
-		lr, lerr := login.Handshake(ctx, host, port, timeout, loginUser)
-		if lerr == nil && lr != nil {
+		pv := int32(login.ProtocolVersionLegacy())
+		if protoVersion > 0 {
+			pv = int32(protoVersion)
+		}
+		lr, lerr := login.Handshake(ctx, host, port, timeout, loginUser, pv, slog.Default())
+		if lerr != nil {
+			slog.Debug("login probe failed", "host", host, "port", port, "err", lerr)
+		}
+		if lr != nil {
 			s.LoginMode = lr.Mode.String()
 		}
 	}
@@ -749,6 +769,7 @@ func updateUsage() string {
 	b.WriteString("  --database PATH  override database path\n")
 	b.WriteString("  --login          perform login handshake to detect online/offline mode\n")
 	b.WriteString("  --login-user STR username for login handshake (default Herobrine)\n")
+	b.WriteString("  --debug-login    dump raw login packet bytes + disconnect reasons to stderr\n")
 	b.WriteString("  --ascii          plain output (no colour, ASCII border and bar)\n")
 	b.WriteString("\nServers are updated oldest-first (by last_seen).\n")
 	b.WriteString("\nExamples:\n")

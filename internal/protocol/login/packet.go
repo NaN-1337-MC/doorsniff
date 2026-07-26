@@ -109,23 +109,16 @@ func ReadPacket(r *bufio.Reader, state string) (*Packet, error) {
 		return nil, fmt.Errorf("login: reading packet data: %w", err)
 	}
 
-	packetReader := bufio.NewReader(bytes.NewReader(data))
-	id, err := ReadVarInt(packetReader)
+	br := bytes.NewReader(data)
+	id, n, err := readVarIntFromBytes(br)
 	if err != nil {
 		return nil, fmt.Errorf("login: reading packet id: %w", err)
 	}
 
-	body := make([]byte, 0)
-	if remaining := len(data) - int(packetReader.Buffered()); remaining > 0 {
-		body = make([]byte, remaining)
-		copy(body, data[len(data)-remaining:])
-	} else {
-		packetReader = bufio.NewReader(bytes.NewReader(data[1:]))
-	}
-
 	p := &Packet{ID: id, State: state}
-	if len(body) > 0 {
-		p.Data = body
+	if n < len(data) {
+		p.Data = make([]byte, len(data)-n)
+		copy(p.Data, data[n:])
 	} else {
 		p.Data = make([]byte, 0)
 	}

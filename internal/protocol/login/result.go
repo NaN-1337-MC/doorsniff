@@ -29,10 +29,34 @@ type LoginResult struct {
 }
 
 var (
-	regexWhitelist = regexp.MustCompile(`(?i)whitelist`)
-	regexBan       = regexp.MustCompile(`(?i)\b(ban|banned)\b`)
-	regexFull      = regexp.MustCompile(`(?i)\bfull\b`)
-	regexKicked    = regexp.MustCompile(`(?i)kicked`)
+	// Whitelist patterns cover the common phrasings servers use:
+	// - "You are not whitelisted on this server"
+	// - "Not on the whitelist"
+	// - "This server is whitelisted"
+	// - "Whitelist enabled"
+	regexWhitelist = regexp.MustCompile(`(?i)whitelist|white[\s_-]?list`)
+
+	// Ban patterns match common phrases like "You are banned from this
+	// server", "You have been banned", "Banned: <reason>".
+	regexBan = regexp.MustCompile(`(?i)\b(ban|banned|banning)\b`)
+
+	// Full patterns match "Server is full", "Server full", "The server
+	// is currently full".
+	regexFull = regexp.MustCompile(`(?i)\bserver\s+is\s+full\b|\bserver\s+full\b|\bserver\s+is\s+currently\s+full\b`)
+
+	// Kicked patterns match generic operator kick messages that don't
+	// fit whitelist/ban/full.
+	regexKicked = regexp.MustCompile(`(?i)\bkicked\b|\byou\s+have\s+been\s+kicked\b`)
+
+	// Version/protocol mismatch — server tells us our client/protocol
+	// is outdated or wrong. Some servers send this as a translated
+	// component (e.g. multiplayer.disconnect.outdated_client /
+	// .outdated_server), others as plain text in their language.
+	regexOutdated = regexp.MustCompile(`(?i)outdated_client|outdated_server|outdated client|outdated server|desactualizado|desactualizada|actualizado!|too old|too new|incompatible`)
+
+	// Modded server requires Forge/FML on the client. Caught from the
+	// "This server has mods that require Forge/FML..." disconnect.
+	regexForge = regexp.MustCompile(`(?i)\b(forge|fml)\b|require.*forge|require.*fml`)
 )
 
 func DetectMode(reasonJSON string) LoginMode {
@@ -60,6 +84,20 @@ func extractTextComponent(v interface{}) string {
 	case map[string]interface{}:
 		if s, ok := val["text"].(string); ok && s != "" {
 			return s
+		}
+		// Some servers send {"translate":"<key>","with":[...]} without a
+		// "text" field. Use the translate key itself plus the "with"
+		// arguments joined, so pattern-based classifiers can still match.
+		if t, ok := val["translate"].(string); ok && t != "" {
+			var b strings.Builder
+			b.WriteString(t)
+			if with, ok := val["with"].([]interface{}); ok {
+				b.WriteByte(' ')
+				for _, w := range with {
+					b.WriteString(extractTextComponent(w))
+				}
+			}
+			return b.String()
 		}
 		if extra, ok := val["extra"].([]interface{}); ok {
 			var b strings.Builder
@@ -98,6 +136,12 @@ func classifyReason(text string) LoginMode {
 	}
 	if regexKicked.MatchString(text) {
 		return LoginModeKicked
+	}
+	if regexOutdated.MatchString(text) {
+		return LoginModeDisconnect
+	}
+	if regexForge.MatchString(text) {
+		return LoginModeDisconnect
 	}
 	return LoginModeDisconnect
 }

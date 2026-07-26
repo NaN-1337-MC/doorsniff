@@ -391,8 +391,11 @@ func (wk *worker) processTarget(ctx context.Context, t model.Target) {
 		}
 
 		if wk.login {
-			loginres, lerr := login.Handshake(ctx, t.IP, t.Port, wk.timeout, wk.loginUser)
-			if lerr == nil && loginres != nil {
+			loginres, lerr := login.Handshake(ctx, t.IP, t.Port, wk.timeout, wk.loginUser, login.ProtocolVersionLegacy(), slog.Default())
+			if lerr != nil {
+				slog.Debug("login probe failed", "ip", t.IP, "port", t.Port, "err", lerr)
+			}
+			if loginres != nil {
 				s.LoginMode = loginres.Mode.String()
 				select {
 				case wk.results <- s:
