@@ -29,6 +29,9 @@ func Run(args []string) error {
 		fmt.Println("swoomps dev (no version yet)")
 		return nil
 	case "help", "-h", "--help":
+		if len(rest) > 0 {
+			return helpCmd(rest[0])
+		}
 		usage()
 		return nil
 	default:
@@ -54,5 +57,17 @@ Commands:
   tui                 live dashboard (view scan progress)
   version             print version
 
-Run 'swoomps help' for more info.`)
+Run 'swoomps help <command>' for more info on a command.`)
+}
+
+func helpCmd(cmd string) error {
+	switch cmd {
+	case "probe":
+		fmt.Print(probeUsage())
+	case "list":
+		fmt.Print(listUsage())
+	default:
+		fmt.Fprintf(os.Stderr, "no help available for %q\n", cmd)
+	}
+	return nil
 }

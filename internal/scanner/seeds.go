@@ -16,9 +16,19 @@ import (
 	"github.com/renanbray/swoomps/internal/model"
 )
 
+// LoadSeedFile parses a single seed file and returns the seeds it
+// contains. The file format is the same as for individual files read
+// by LoadSeeds: one "host" or "host:port" per line, "#" comments
+// allowed.
+func LoadSeedFile(path string) ([]model.Seed, error) {
+	return parseSeedFile(path)
+}
+
 // LoadSeeds reads every regular file in dir and returns one Seed per
-// non-empty, non-comment line. Each line is "host" or "host:port";
-// port defaults to 25565. Lines starting with "#" are ignored.
+// non-empty, non-comment line. Each line is "host", "host:port", or
+// a CIDR like "10.0.0.0/24". Port defaults to 25565. CIDR entries
+// are expanded into individual IPs. Lines starting with "#" are
+// ignored.
 func LoadSeeds(dir string) ([]model.Seed, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -59,6 +69,21 @@ func parseSeedFile(path string) ([]model.Seed, error) {
 		if line == "" {
 			continue
 		}
+		// CIDR notation: expand into individual IPs.
+		if strings.Contains(line, "/") {
+			ips, err := expandCIDR(line)
+			if err != nil {
+				return nil, fmt.Errorf("line %q: %w", line, err)
+			}
+			for _, ip := range ips {
+				seeds = append(seeds, model.Seed{
+					Host:    ip,
+					Port:    25565,
+					AddedAt: now,
+				})
+			}
+			continue
+		}
 		host, port, err := parseSeedLine(line)
 		if err != nil {
 			return nil, fmt.Errorf("line %q: %w", line, err)
@@ -73,6 +98,33 @@ func parseSeedFile(path string) ([]model.Seed, error) {
 		return nil, fmt.Errorf("scanning %q: %w", path, err)
 	}
 	return seeds, nil
+}
+
+func expandCIDR(cidr string) ([]string, error) {
+	ip, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CIDR %q: %w", cidr, err)
+	}
+	var ips []string
+	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); inc(ip) {
+		ips = append(ips, ip.String())
+	}
+	// Network and broadcast addresses are excluded by net.Contains
+	// for the first and last IPs, so we add them back manually.
+	// Actually net.Contains includes the network address but excludes
+	// the broadcast — let's just include all addresses net.Contains
+	// returns, which is the full usable range.
+	return ips, nil
+}
+
+// inc increments an IPv4 address in place.
+func inc(ip net.IP) {
+	for j := len(ip) - 1; j >= 0; j-- {
+		ip[j]++
+		if ip[j] > 0 {
+			break
+		}
+	}
 }
 
 func parseSeedLine(line string) (string, uint16, error) {

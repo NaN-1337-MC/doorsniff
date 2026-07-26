@@ -199,6 +199,111 @@ LIMIT ? OFFSET ?;
 	return out, nil
 }
 
+// ListQuery is a flexible filter for ListServersFiltered. Each field
+// is optional; zero value means "no filter". The CLI builds this from
+// flags and the repo turns it into SQL.
+type ListQuery struct {
+	PlayerSQL string   // raw SQL fragment for player filter, e.g. "(num_players > ?)"
+	PlayerArgs []any   // args for PlayerSQL
+	Versions  []string // version substrings to match (OR'd)
+	Engine    string   // engine substring (case-insensitive LIKE)
+	MOTD      string   // MOTD substring (case-insensitive LIKE)
+	PortLo    uint16   // 0 = no filter
+	PortHi    uint16   // 0 = no filter
+	OrderBy   string   // SQL ORDER BY fragment, default "last_seen DESC"
+	Limit     int      // 0 = default 50
+}
+
+// ListServersFiltered executes a flexible query built from ListQuery.
+func (r *Repository) ListServersFiltered(ctx context.Context, q ListQuery) ([]model.Server, error) {
+	if q.Limit <= 0 {
+		q.Limit = 50
+	}
+	if q.OrderBy == "" {
+		q.OrderBy = "last_seen DESC"
+	}
+
+	var (
+		conds []string
+		args  []any
+	)
+
+	// Player filter (already built as raw SQL).
+	if q.PlayerSQL != "" {
+		conds = append(conds, q.PlayerSQL)
+		args = append(args, q.PlayerArgs...)
+	}
+
+	// Version substring match.
+	if len(q.Versions) > 0 {
+		var parts []string
+		for _, v := range q.Versions {
+			parts = append(parts, "LOWER(version_name) LIKE ?")
+			args = append(args, "%"+strings.ToLower(v)+"%")
+		}
+		conds = append(conds, "("+strings.Join(parts, " OR ")+")")
+	}
+
+	// Engine substring.
+	if q.Engine != "" {
+		conds = append(conds, "LOWER(version_name) LIKE ?")
+		args = append(args, "%"+strings.ToLower(q.Engine)+"%")
+	}
+
+	// MOTD substring.
+	if q.MOTD != "" {
+		conds = append(conds, "LOWER(motd) LIKE ?")
+		args = append(args, "%"+strings.ToLower(q.MOTD)+"%")
+	}
+
+	// Port filter.
+	if q.PortLo != 0 && q.PortHi != 0 {
+		if q.PortLo == q.PortHi {
+			conds = append(conds, "port = ?")
+			args = append(args, q.PortLo)
+		} else {
+			conds = append(conds, "port BETWEEN ? AND ?")
+			args = append(args, q.PortLo, q.PortHi)
+		}
+	}
+
+	where := ""
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
+	}
+
+	sql := fmt.Sprintf(`
+SELECT ip, port, first_seen, last_seen, last_latency_ms,
+       version_protocol, version_name, motd,
+       num_players, max_players, sample_players,
+       query_enabled, plugins, country, raw_query, probe_kind
+FROM servers%s
+ORDER BY %s
+LIMIT ?;
+`, where, q.OrderBy)
+
+	args = append(args, q.Limit)
+
+	rows, err := r.db.conn.QueryContext(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying servers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []model.Server
+	for rows.Next() {
+		s, err := scanServer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning server: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
+	}
+	return out, nil
+}
+
 // GetStats returns aggregated counts for the TUI.
 func (r *Repository) GetStats(ctx context.Context) (Stats, error) {
 	var s Stats
@@ -377,4 +482,39 @@ func nullableString(s string) any {
 		return nil
 	}
 	return s
+}
+
+// LoadProgress returns the set of seeds whose scan was completed,
+// keyed by seed IP with the last port that was scanned.
+func (r *Repository) LoadProgress(ctx context.Context) (map[string]uint16, error) {
+	rows, err := r.db.conn.QueryContext(ctx, `SELECT seed_ip, last_port FROM scan_progress;`)
+	if err != nil {
+		return nil, fmt.Errorf("querying scan_progress: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[string]uint16)
+	for rows.Next() {
+		var ip string
+		var port uint16
+		if err := rows.Scan(&ip, &port); err != nil {
+			return nil, fmt.Errorf("scanning scan_progress row: %w", err)
+		}
+		out[ip] = port
+	}
+	return out, rows.Err()
+}
+
+// SaveProgress records that seedIP was fully scanned up to lastPort.
+func (r *Repository) SaveProgress(ctx context.Context, seedIP string, lastPort uint16) error {
+	const q = `
+INSERT INTO scan_progress (seed_ip, last_port) VALUES (?, ?)
+ON CONFLICT (seed_ip) DO UPDATE SET
+  last_port  = excluded.last_port,
+  updated_at = CURRENT_TIMESTAMP;
+`
+	if _, err := r.db.conn.ExecContext(ctx, q, seedIP, lastPort); err != nil {
+		return fmt.Errorf("saving progress for %s: %w", seedIP, err)
+	}
+	return nil
 }

@@ -7,7 +7,7 @@ import (
 
 // currentSchemaVersion is the latest schema version. Bump on every
 // backward-incompatible change and add a new entry to migrations.
-const currentSchemaVersion = 1
+const currentSchemaVersion = 2
 
 type migration struct {
 	version int
@@ -19,6 +19,7 @@ type migration struct {
 // are safe.
 var migrations = []migration{
 	{version: 1, sql: schemaV1},
+	{version: 2, sql: schemaV2},
 }
 
 const schemaV1 = `
@@ -57,6 +58,14 @@ CREATE INDEX IF NOT EXISTS idx_servers_country
 
 CREATE INDEX IF NOT EXISTS idx_servers_port
   ON servers(port);
+`
+
+const schemaV2 = `
+CREATE TABLE IF NOT EXISTS scan_progress (
+  seed_ip    TEXT    PRIMARY KEY,
+  last_port  INTEGER NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 // EnsureSchema applies any pending migrations. Safe to call on every

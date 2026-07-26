@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/renanbray/swoomps/internal/config"
+	"github.com/renanbray/swoomps/internal/model"
 	"github.com/renanbray/swoomps/internal/scanner"
 	"github.com/renanbray/swoomps/internal/storage"
 )
@@ -35,16 +36,20 @@ func runProbe(args []string) error {
 		asciiFlag        bool
 		databaseFlag     string
 		seedsFlag        string
+		fileFlag         string
+		resumeFlag       bool
 	)
 	fs.StringVar(&portsFlag, "ports", "1-65535", "port range, e.g. 25565, 25500-25600, 1-65535")
-	fs.IntVar(&qpsFlag, "qps", 50, "global QPS limit")
-	fs.IntVar(&workersFlag, "workers", 64, "worker pool size")
-	fs.DurationVar(&timeoutFlag, "timeout", 3*time.Second, "per-probe timeout")
+	fs.IntVar(&qpsFlag, "qps", 200, "global QPS limit")
+	fs.IntVar(&workersFlag, "workers", 256, "worker pool size")
+	fs.DurationVar(&timeoutFlag, "timeout", 1*time.Second, "per-probe timeout")
 	fs.BoolVar(&verboseFlag, "verbose", false, "verbose (per-target error lines + debug logging)")
 	fs.BoolVar(&verboseShortFlag, "v", false, "short alias for --verbose")
 	fs.BoolVar(&asciiFlag, "ascii", false, "plain output (no colour, ASCII border and bar)")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
 	fs.StringVar(&seedsFlag, "seeds", "", "override seeds directory")
+	fs.StringVar(&fileFlag, "file", "", "read seeds from a single file instead of the seeds directory")
+	fs.BoolVar(&resumeFlag, "resume", false, "skip seeds that were fully scanned in a previous run")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -75,13 +80,29 @@ func runProbe(args []string) error {
 		dbPath = databaseFlag
 	}
 
+	// --file overrides the seeds directory.
+	var fileSeeds []model.Seed
+	if fileFlag != "" {
+		fileSeeds, err = scanner.LoadSeedFile(fileFlag)
+		if err != nil {
+			return fmt.Errorf("loading seeds from %q: %w", fileFlag, err)
+		}
+		if len(fileSeeds) == 0 {
+			return fmt.Errorf("no seeds found in %q", fileFlag)
+		}
+	}
+
 	setupLogging(verbose)
 
 	styles := scanner.NewStyles(asciiFlag)
 
+	seedsLabel := seedsDir
+	if fileFlag != "" {
+		seedsLabel = fileFlag
+	}
 	fmt.Fprintf(os.Stdout, "%s %s\n",
 		styles.Label.Render("seeds:"),
-		styles.Value.Render(seedsDir))
+		styles.Value.Render(seedsLabel))
 	fmt.Fprintf(os.Stdout, "%s %s\n",
 		styles.Label.Render("db:   "),
 		styles.Value.Render(dbPath))
@@ -109,8 +130,10 @@ func runProbe(args []string) error {
 		PortsHi:  hi,
 		Repo:     repo,
 		SeedsDir: seedsDir,
+		Seeds:    fileSeeds,
 		Verbose:  verbose,
 		ASCII:    asciiFlag,
+		Resume:   resumeFlag,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "[ERROR] scanner: %v\n", err)
@@ -162,9 +185,11 @@ func probeUsage() string {
 	b.WriteString("Usage:\n  swoomps probe [flags]\n\n")
 	b.WriteString("Flags:\n")
 	b.WriteString("  --ports RANGE       port range (default 1-65535)\n")
-	b.WriteString("  --qps N             global QPS limit (default 50)\n")
-	b.WriteString("  --workers N         worker pool size (default 64)\n")
-	b.WriteString("  --timeout DUR       per-probe timeout (default 3s)\n")
+	b.WriteString("  --qps N             global QPS limit (default 200)\n")
+	b.WriteString("  --workers N         worker pool size (default 256)\n")
+	b.WriteString("  --timeout DUR       per-probe timeout (default 1s)\n")
+	b.WriteString("  --file PATH         read seeds from a single file\n")
+	b.WriteString("  --resume            skip seeds fully scanned in a previous run\n")
 	b.WriteString("  --seeds DIR         override seeds directory\n")
 	b.WriteString("  --database PATH     override database path\n")
 	b.WriteString("  --verbose, -v       show per-target error lines (timeouts, SLP failures)\n")
