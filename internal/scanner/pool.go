@@ -46,6 +46,11 @@ type PoolConfig struct {
 	Total   int64     // total targets; 0 disables the progress bar
 	PortsLo uint16
 	PortsHi uint16
+
+	// Ticker is the sticky progress bar. When non-nil the worker
+	// calls ticker.InsertAbove to display found-server blocks
+	// without scrolling the bar.
+	Ticker *Ticker
 }
 
 // Run consumes the target channel and dispatches each target to a
@@ -84,7 +89,7 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stat
 
 	stats := &Stats{}
 
-	var stopProgress func()
+	var tick *Ticker
 	if cfg.Total > 0 {
 		prog := &Progress{
 			Total:   cfg.Total,
@@ -100,7 +105,9 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stat
 			Out:     w,
 			Styles:  styles,
 		}
-		stopProgress = prog.Run(500 * time.Millisecond)
+		tick = NewTicker(prog)
+		tick.Start(500 * time.Millisecond)
+		cfg.Ticker = tick
 	}
 
 	writerDone := make(chan struct{})
@@ -123,7 +130,7 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stat
 
 	for i := 0; i < cfg.Workers; i++ {
 		g.Go(func() error {
-			return runWorker(gctx, targets, limiter, cfg.Timeout, cfg.Verbose, w, styles, results, stats)
+			return runWorker(gctx, targets, limiter, cfg.Timeout, cfg.Verbose, w, styles, results, stats, cfg.Ticker)
 		})
 	}
 
@@ -131,8 +138,8 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (Stat
 	close(results)
 	<-writerDone
 
-	if stopProgress != nil {
-		stopProgress()
+	if tick != nil {
+		tick.Stop()
 	}
 
 	stats.Duration = time.Since(start)
@@ -153,6 +160,7 @@ func runWorker(
 	styles *Styles,
 	results chan<- model.Server,
 	stats *Stats,
+	tick *Ticker,
 ) error {
 	for {
 		var t model.Target
@@ -221,7 +229,11 @@ func runWorker(
 					return ctx.Err()
 				}
 				stats.Found.Add(1)
-				styles.RenderFound(w, s)
+				if tick != nil {
+					tick.InsertAbove(styles.FormatFound(s))
+				} else {
+					fmt.Fprint(w, styles.FormatFound(s))
+				}
 				continue
 			}
 
@@ -264,7 +276,11 @@ func runWorker(
 		}
 
 		stats.Found.Add(1)
-		styles.RenderFound(w, s)
+		if tick != nil {
+			tick.InsertAbove(styles.FormatFound(s))
+		} else {
+			fmt.Fprint(w, styles.FormatFound(s))
+		}
 	}
 }
 

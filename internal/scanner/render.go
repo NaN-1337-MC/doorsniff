@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/renanbray/swoomps/internal/model"
 )
 
@@ -72,18 +73,19 @@ func NewStyles(ascii bool) *Styles {
 	return s
 }
 
-// RenderFound writes a styled "found" block to w. The address sits
-// on its own line (easy to copy); the metadata follows in a bordered
-// card.
-func (s *Styles) RenderFound(w io.Writer, srv model.Server) {
+// FormatFound returns a styled "found" block as a string. The address
+// sits on its own line; the metadata follows in a bordered card.
+func (s *Styles) FormatFound(srv model.Server) string {
+	var b strings.Builder
+
 	ipStyle := s.IPIdle
 	if srv.NumPlayers > 0 {
 		ipStyle = s.IPActive
 	}
 
-	fmt.Fprint(w, s.FoundPrefix.Render("[+] "))
-	fmt.Fprint(w, ipStyle.Render(srv.Address()))
-	fmt.Fprintln(w)
+	fmt.Fprint(&b, s.FoundPrefix.Render("[+] "))
+	fmt.Fprint(&b, ipStyle.Render(srv.Address()))
+	fmt.Fprintln(&b)
 
 	var rows []string
 
@@ -117,8 +119,109 @@ func (s *Styles) RenderFound(w io.Writer, srv model.Server) {
 	}
 
 	content := strings.Join(rows, "\n")
-	fmt.Fprintln(w, s.Card.Render(content))
-	fmt.Fprintln(w)
+	fmt.Fprintln(&b, s.Card.Render(content))
+	fmt.Fprintln(&b)
+	return b.String()
+}
+
+// Ticker manages a sticky progress bar at the bottom of the terminal.
+// Found-server blocks are inserted above the bar via InsertAbove.
+// Updates overwrite the bar in place using ANSI cursor control.
+type Ticker struct {
+	prog *Progress
+	out  io.Writer
+	done chan struct{}
+
+	// tty is true when stdout is a terminal. When false, ANSI
+	// cursor sequences are skipped and output scrolls normally.
+	tty bool
+}
+
+// NewTicker creates a Ticker. Call Start to begin rendering.
+func NewTicker(prog *Progress) *Ticker {
+	w := prog.Out
+	if w == nil {
+		w = os.Stdout
+	}
+	_, isTTY := w.(*os.File)
+	return &Ticker{prog: prog, out: w, done: make(chan struct{}), tty: isTTY}
+}
+
+// Start prints the header and first progress bar, then begins
+// overwriting the bar every interval. Returns immediately.
+func (t *Ticker) Start(interval time.Duration) {
+	if !t.tty {
+		fmt.Fprintln(t.out, t.prog.Header())
+		fmt.Fprintln(t.out, t.prog.Render())
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-t.done:
+					return
+				case <-ticker.C:
+					fmt.Fprintln(t.out, t.prog.Render())
+				}
+			}
+		}()
+		return
+	}
+
+	out := termenv.NewOutput(t.out.(*os.File))
+
+	fmt.Fprintln(t.out, t.prog.Header())
+	fmt.Fprintln(t.out, t.prog.Render())
+
+	// Save cursor after the progress bar line.
+	out.SaveCursorPosition()
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-t.done:
+				return
+			case <-ticker.C:
+				// Move up 1 line, clear, reprint bar.
+				out.CursorUp(1)
+				out.ClearLine()
+				fmt.Fprintln(t.out, t.prog.Render())
+				out.SaveCursorPosition()
+			}
+		}
+	}()
+}
+
+// InsertAbove writes a block of text above the sticky progress bar.
+func (t *Ticker) InsertAbove(block string) {
+	if block == "" {
+		return
+	}
+	if !t.tty {
+		fmt.Fprint(t.out, block)
+		return
+	}
+
+	out := termenv.NewOutput(t.out.(*os.File))
+
+	// Move up 1 line (the progress bar).
+	out.CursorUp(1)
+	out.ClearLine()
+
+	// Print the found block.
+	fmt.Fprint(t.out, block)
+
+	// Reprint the progress bar below.
+	fmt.Fprintln(t.out, t.prog.Render())
+	out.SaveCursorPosition()
+}
+
+// Stop halts the background goroutine. The last progress bar line
+// remains visible.
+func (t *Ticker) Stop() {
+	close(t.done)
 }
 
 // Progress tracks the live state of a scan and renders the status
@@ -141,18 +244,13 @@ type Progress struct {
 }
 
 // Header returns the static config line printed once at the start of
-// a scan. The user sees the ports, qps, and workers they selected
-// while the run is in progress.
+// a scan.
 func (p *Progress) Header() string {
 	return fmt.Sprintf("[scan] ports=%d-%d  qps=%d  workers=%d  timeout=%s",
 		p.PortsLo, p.PortsHi, p.QPS, p.Workers, p.Timeout)
 }
 
-// Render returns one status line. Format:
-//
-//	[████████████████░░░░░░░░░░░░]  42.5% (139k/327k)  ETA 0:50  320 pps
-//
-// In ASCII mode the bar uses '#' and '.' and no colour is applied.
+// Render returns one status line.
 func (p *Progress) Render() string {
 	probed := p.Probed.Load()
 	if probed > p.Total {
@@ -191,32 +289,6 @@ func (p *Progress) Render() string {
 		p.Styles.Eta.Render(formatDuration(eta)),
 		p.Styles.Pps.Render(fmt.Sprintf("%.0f pps", pps)),
 	)
-}
-
-// Run starts a goroutine that prints the progress line every
-// interval. The first line is the static config header; subsequent
-// lines are the live progress bar. Returns a stop function.
-func (p *Progress) Run(interval time.Duration) func() {
-	w := p.Out
-	if w == nil {
-		w = os.Stdout
-	}
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		fmt.Fprintln(w, p.Header())
-		fmt.Fprintln(w, p.Render())
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				fmt.Fprintln(w, p.Render())
-			}
-		}
-	}()
-	return func() { close(done) }
 }
 
 // formatDuration turns a duration into a compact ETA-style string:
