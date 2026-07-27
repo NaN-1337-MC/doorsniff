@@ -11,13 +11,14 @@ The current CLI is subcommand-based:
 ```
 swoomps probe                  # run a scan
 swoomps list                   # query the database
+swoomps update                 # re-probe known servers
+swoomps init                   # initialize config and database
 swoomps version                # print version
 swoomps help <sub>             # subcommand help
 ```
 
-`scan`, `tui`, `init`, and `seed` are reserved subcommands. They
-print "em breve" for now and will be implemented in upcoming
-phases.
+`tui` and `seed` are reserved subcommands. They print "em breve" for
+now and will be implemented in upcoming phases.
 
 ## Index
 

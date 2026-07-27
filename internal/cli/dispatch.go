@@ -15,18 +15,12 @@ func Run(args []string) error {
 	switch cmd {
 	case "probe":
 		return runProbe(rest)
-	case "scan":
-		return runScan(rest)
-	case "tui":
-		return runTUI(rest)
 	case "list":
 		return runList(rest)
-	case "seed":
-		return runSeed(rest)
-	case "init":
-		return runInit(rest)
 	case "update":
 		return runUpdate(rest)
+	case "init":
+		return runInit(rest)
 	case "version", "-v", "--version":
 		fmt.Println("swoomps dev (no version yet)")
 		return nil
@@ -54,10 +48,7 @@ Commands:
   probe               scan seeds from the configured directory or a file
   list                query and display found servers
   update              re-probe known servers to refresh their data
-  scan                long-running scan (em breve)
-  tui                 live dashboard (em breve)
   init                initialize config and database
-  seed                manage seeds (em breve)
   version             print version
 
 Run 'swoomps help <command>' for more info on a command.`)

@@ -10,28 +10,29 @@ database, and prints each finding live to a styled terminal.
 
 ## Status
 
-**Phases 0-8 complete, 9 partial.** The `probe` and `list`
-subcommands are stable. `scan`, `tui`, `init`, and `seed` are
-reserved but not yet implemented. Resume, per-IP progress bar, and
-CIDR expansion in seed files all work. See
-[docs/plan.md](docs/plan.md) for the roadmap.
+**Phases 0-9 complete.** `probe`, `list`, `update`, and `init` are
+stable. `tui` and `seed` are reserved but not yet implemented.
+Resume, per-IP progress bar, CIDR expansion, and login mode detection
+all work. See [docs/plan.md](docs/plan.md) for the roadmap.
 
 ## Features
 
-- Subcommand CLI: `swoomps probe` and `swoomps list`
+- Subcommand CLI: `swoomps probe`, `swoomps list`, `swoomps update`,
+  `swoomps init`
 - Configurable port range (default `1-65535`)
 - TCP connect probe with rate limit (default 200 QPS, 256 workers)
 - Server List Ping (modern 1.7+) with JSON response
 - Legacy SLP (1.6) as a fallback when the modern handshake is RST'd
   by a proxy
+- Login handshake to detect online/offline mode, whitelist, bans
 - CIDR expansion in seed files (`69.9.176.0/20` becomes 4096 seeds)
 - Local SQLite storage (pure-Go driver, no CGO)
 - Live terminal output, lipgloss styled
 - Two-line sticky progress bar: per-IP + overall
 - Resume support: `--resume` skips seeds that were fully scanned
   in a previous run
-- Seven filters on `swoomps list` (version, engine, players, port,
-  MOTD, sort, limit)
+- Nine filters on `swoomps list` (version, engine, players, maxplayers,
+  port, MOTD, login mode, sort, limit)
 - ASCII mode for plain terminals (`--ascii`)
 - XDG-compliant config and database paths
 - Cross-platform (Linux, macOS, Windows) — single static binary
@@ -74,8 +75,25 @@ checkpoint.
 | `--maxplayers EXPR` | — | Max players predicate (`>=100`, `50-200`, `<500`) |
 | `--port PORT` | — | Port or port range |
 | `--motd TEXT` | — | MOTD substring search |
-| `--sort KEY` | `recent` | Sort: `players`, `latency`, `version`, `port`, `recent`, `oldest` |
+| `--login MODE` | — | Login mode filter (`cracked`, `premium`, `whitelist`, `banned`, `kicked`, `full`) |
+| `--sort KEY` | `recent` | Sort: `players`, `latency`, `version`, `port`, `recent`, `oldest`, `login` |
 | `--limit N` | `50` | Max results |
+| `--database PATH` | XDG default | Override database path |
+
+## `swoomps update`
+
+Re-probes known servers to refresh their data. Supports the same
+filter flags as `list` to select which servers to update.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--qps N` | `200` | Global QPS limit |
+| `--workers N` | `64` | Worker pool size |
+| `--limit N` | `0` | Max servers to update (0 = all) |
+| `--login` | `false` | Perform login handshake to detect online/offline mode |
+| `--login-user NAME` | `Herobrine` | Username for login handshake |
+| `--debug-login` | `false` | Dump raw login packets to stderr |
+| `--ascii` | `false` | Plain output (no colour, ASCII bar) |
 | `--database PATH` | XDG default | Override database path |
 
 ## Documentation

@@ -30,16 +30,16 @@ The CLI is subcommand-based. Every action is a subcommand of
 |---|---|
 | `swoomps probe` | Run a scan against the seeds directory or a file |
 | `swoomps list` | Query the database of found servers |
-| `swoomps scan` | Long-running scan (em breve) |
+| `swoomps update` | Re-probe known servers to refresh their data |
+| `swoomps init` | Initialize config and database |
 | `swoomps tui` | Live dashboard (em breve) |
-| `swoomps init` | Initialize config and database (em breve) |
 | `swoomps seed` | Manage seeds (em breve) |
 | `swoomps version` | Print version |
 | `swoomps help <sub>` | Subcommand-specific help |
 
-`scan`, `tui`, `init`, and `seed` are stubs. They print a "not
-implemented yet" message today. The stable surface is `probe` and
-`list`.
+`tui` and `seed` are stubs. They print a "not implemented yet"
+message today. The stable surface is `probe`, `list`, `update`, and
+`init`.
 
 ## `swoomps probe`
 
@@ -131,11 +131,23 @@ gradient from green to red).
 | `--version VER` | — | Comma-separated version substrings, OR'd (e.g. `1.21.1,26.1.2`) |
 | `--engine ENG` | — | Engine substring, case-insensitive (e.g. `paper`, `purpur`) |
 | `--players EXPR` | — | Player predicate: `>1`, `<50`, `1-10`, `=5`, `5` (shorthand for `=5`) |
+| `--maxplayers EXPR` | — | Max players predicate: `>=100`, `50-200`, `<500` |
 | `--port PORT` | — | Port or port range (`25565` or `25500-25600`) |
 | `--motd TEXT` | — | MOTD substring search |
-| `--sort KEY` | `recent` | Sort: `players`, `latency`, `version`, `port`, `recent`, `oldest` |
+| `--login MODE` | — | Login mode filter (`cracked`, `premium`, `whitelist`, `banned`, `kicked`, `full`) |
+| `--sort KEY` | `recent` | Sort: `players`, `latency`, `version`, `port`, `recent`, `oldest`, `login` |
 | `--limit N` | `50` | Max results |
 | `--database PATH` | XDG default | Override database path |
+
+### Table columns
+
+| # | ADDRESS | VERSION | LOGIN | PLAYERS | LATENCY | LAST SEEN | MOTD | MAP |
+|---|---------|---------|-------|---------|---------|-----------|------|-----|
+
+- `#` — ordinal row number
+- `LOGIN` — login mode: `cracked`, `premium`, `whitelist`, `banned`,
+  `kicked`, `full`, `disconnect`, `-`
+- `LAST SEEN` — `YYYY-MM-DD HH:MM` format
 
 ### Examples
 
@@ -151,6 +163,45 @@ swoomps list --version 1.21.1 --port '25566-26000'
 
 # Servers with "survival" in the MOTD.
 swoomps list --motd survival
+```
+
+## `swoomps update`
+
+Re-probes known servers to refresh their data. Selects servers from
+the database using the same filters as `list`, then re-dials each
+one to get fresh player counts, MOTD, and version info.
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--version VER` | — | Filter by version substring |
+| `--engine ENG` | — | Filter by engine substring |
+| `--players EXPR` | — | Filter by player count |
+| `--maxplayers EXPR` | — | Filter by max players |
+| `--port PORT` | — | Filter by port or range |
+| `--motd TEXT` | — | Filter by MOTD substring |
+| `--qps N` | `200` | Global QPS limit |
+| `--workers N` | `64` | Worker pool size |
+| `--limit N` | `0` | Max servers to update (0 = all) |
+| `--login` | `false` | Perform login handshake to detect online/offline mode |
+| `--login-user NAME` | `Herobrine` | Username for login handshake |
+| `--debug-login` | `false` | Dump raw login packets to stderr |
+| `--ascii` | `false` | Plain output (no colour, ASCII bar) |
+| `--database PATH` | XDG default | Override database path |
+
+### Examples
+
+```bash
+# Update all known servers.
+swoomps update
+
+# Update only Paper servers with players.
+swoomps update --engine paper --players '>0'
+
+# Update with login handshake detection.
+swoomps update --login
+
+# Update max 100 servers on non-default ports.
+swoomps update --port '25500-25600' --limit 100
 ```
 
 ## Configuration

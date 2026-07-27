@@ -18,9 +18,9 @@ import (
 	"github.com/renanbray/swoomps/internal/storage"
 )
 
-var tableHeaders = []string{"ADDRESS", "VERSION", "PLAYERS", "LATENCY", "PORT", "LOGIN", "LAST SEEN", "MOTD"}
+var tableHeaders = []string{"#", "ADDRESS", "VERSION", "LOGIN", "PLAYERS", "LATENCY", "LAST SEEN", "MOTD", "MAP"}
 
-var tableWidths = []int{22, 20, 10, 9, 7, 10, 12, 36}
+var tableWidths = []int{5, 22, 20, 10, 10, 9, 20, 36, 16}
 
 func runList(args []string) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
@@ -145,14 +145,15 @@ func printServerTable(w io.Writer, servers []model.Server) {
 		motd = strings.ReplaceAll(motd, "\n", " ")
 
 		rows[i] = []string{
+			fmt.Sprintf("%d", i+1),
 			s.Address(),
 			s.VersionName,
+			loginModeLabel(s.LoginMode),
 			fmt.Sprintf("%d/%d", s.NumPlayers, s.MaxPlayers),
 			fmt.Sprintf("%dms", s.LastLatencyMs),
-			fmt.Sprintf("%d", s.Port),
-			loginModeLabel(s.LoginMode),
-			s.LastSeen.Format("2006-01-02"),
+			s.LastSeen.Format("2006-01-02 15:04"),
 			motd,
+			s.Map,
 		}
 	}
 
@@ -172,19 +173,19 @@ func printServerTable(w io.Writer, servers []model.Server) {
 
 			server := servers[row]
 
+			// Ordinal column: dim.
+			if col == 0 {
+				return s.Foreground(lipgloss.Color("245"))
+			}
+
 			// Players column: green when > 0.
-			if col == 2 && server.NumPlayers > 0 {
+			if col == 4 && server.NumPlayers > 0 {
 				return s.Foreground(lipgloss.Color("42")).Bold(true)
 			}
 
 			// Latency column: color gradient.
-			if col == 3 {
+			if col == 5 {
 				return s.Foreground(latencyColor(server.LastLatencyMs))
-			}
-
-			// Login column: color by mode.
-			if col == 5 && server.LoginMode != "" {
-				return s.Foreground(loginModeColor(server.LoginMode))
 			}
 
 			return s
@@ -232,25 +233,6 @@ func normalizeLoginMode(s string) string {
 		return "full"
 	default:
 		return ""
-	}
-}
-
-func loginModeColor(mode string) lipgloss.Color {
-	switch mode {
-	case "offline":
-		return lipgloss.Color("46")
-	case "online":
-		return lipgloss.Color("51")
-	case "whitelisted":
-		return lipgloss.Color("220")
-	case "banned":
-		return lipgloss.Color("196")
-	case "kicked":
-		return lipgloss.Color("214")
-	case "full":
-		return lipgloss.Color("208")
-	default:
-		return lipgloss.Color("245")
 	}
 }
 

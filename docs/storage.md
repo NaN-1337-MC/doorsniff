@@ -86,6 +86,13 @@ Columns:
 - `probe_kind` — how the server was discovered: `slp` (modern 1.7+)
   or `slp-legacy` (1.6 fallback used when the modern handshake RSTs).
   The Query value is reserved for the planned UDP probe.
+- `map` — current map name, populated from Query protocol.
+- `gametype` — game type (e.g. `survival`), populated from Query
+  protocol.
+- `login_mode` — login handshake result: `online` (premium/Mojang
+  auth), `offline` (cracked/no auth), `whitelisted`, `banned`,
+  `kicked`, `full`, `disconnect` (server responded with something
+  else), `unknown` (no login handshake performed).
 
 ### `scan_progress` (migration v2)
 
@@ -124,6 +131,8 @@ writes the new version row. Migrations are listed in
 |---|---|
 | v1 | `servers` table + 5 indexes |
 | v2 | `scan_progress` table (resume support) |
+| v3 | `map` and `gametype` columns (query protocol) |
+| v4 | `login_mode` column (online/offline detection) |
 
 Each migration's SQL is idempotent on its own
 (`CREATE TABLE IF NOT EXISTS`), so re-runs after a partial crash are
