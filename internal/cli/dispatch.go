@@ -73,8 +73,31 @@ func helpCmd(cmd string) error {
 		fmt.Print(listUsage())
 	case "update":
 		fmt.Print(updateUsage())
+	case "init":
+		fmt.Print(initUsage())
 	default:
 		fmt.Fprintf(os.Stderr, "no help available for %q\n", cmd)
 	}
 	return nil
+}
+
+func initUsage() string {
+	return `doorsniff init — initialize config file and database
+
+Usage:
+  doorsniff init [flags]
+
+Creates:
+  - Config file: ~/.config/doorsniff/config.yaml
+  - Database: ~/.local/share/doorsniff/doorsniff.db
+
+The config file contains all configurable options with their default
+values. Edit it to customize doorsniff behavior.
+
+Flags:
+  (none — init has no flags)
+
+Examples:
+  doorsniff init
+`
 }

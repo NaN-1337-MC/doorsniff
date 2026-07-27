@@ -2,7 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -11,6 +14,17 @@ import (
 )
 
 func runInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Print(initUsage())
+			return nil
+		}
+		return fmt.Errorf("parsing flags: %w", err)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -63,16 +77,55 @@ ports: "25500-25700"
 probe_qps: 100
 probe_workers: 128
 probe_timeout: 1s
+probe_login: true
 
 # Update settings
 update_qps: 100
 update_workers: 128
 update_timeout: 1s
 update_limit: 0
+update_login: true
 
 # List settings
+# Available columns: ordinal, address, version, login, players, latency,
+#                   last_seen, motd, map, country, plugins, protocol, player_names
 list_sort: "recent"
 list_limit: 100
+list_columns:
+  - ordinal
+  - address
+  - version
+  - login
+  - players
+  - latency
+  - last_seen
+  - motd
+  - map
+
+# Date format (use Go reference date format)
+# 02/01/2006 = DD/MM/YYYY, 01/02/2006 = MM/DD/YYYY, 2006-01-02 = YYYY-MM-DD
+# Add time: "02/01/2006 15:04:05" = DD/MM/YYYY HH:mm:ss
+list_date_format: "02/01/2006 15:04:05"
+
+# Scanner settings
+scanner_result_channel_size: 256
+update_op_channel_size: 128
+progress_ticker_interval: 500ms
+
+# Protocol settings
+slp_max_response_bytes: 1048576
+query_max_response_bytes: 4096
+login_max_packet_bytes: 2097152
+max_string_length: 32767
+
+# Display settings
+progress_bar_width: 30
+max_motd_display_len: 70
+max_plugins_display_len: 60
+max_player_names_display_len: 30
+
+# Storage settings
+sqlite_sync_mode: "NORMAL"
 
 # Common settings
 login_user: "Herobrine"

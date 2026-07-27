@@ -37,16 +37,40 @@ type Config struct {
 	ProbeQPS     int           `mapstructure:"probe_qps"`
 	ProbeWorkers int           `mapstructure:"probe_workers"`
 	ProbeTimeout time.Duration `mapstructure:"probe_timeout"`
+	ProbeLogin   bool         `mapstructure:"probe_login"`
 
 	// Update settings
 	UpdateQPS     int           `mapstructure:"update_qps"`
 	UpdateWorkers int           `mapstructure:"update_workers"`
 	UpdateTimeout time.Duration `mapstructure:"update_timeout"`
 	UpdateLimit   int           `mapstructure:"update_limit"`
+	UpdateLogin   bool         `mapstructure:"update_login"`
 
 	// List settings
-	ListSort  string `mapstructure:"list_sort"`
-	ListLimit int    `mapstructure:"list_limit"`
+	ListSort      string   `mapstructure:"list_sort"`
+	ListLimit     int      `mapstructure:"list_limit"`
+	ListColumns   []string `mapstructure:"list_columns"`
+	ListDateFormat string  `mapstructure:"list_date_format"`
+
+	// Scanner settings
+	ScannerResultChannelSize int           `mapstructure:"scanner_result_channel_size"`
+	UpdateOpChannelSize      int           `mapstructure:"update_op_channel_size"`
+	ProgressTickerInterval   time.Duration `mapstructure:"progress_ticker_interval"`
+
+	// Protocol settings
+	SLPMaxResponseBytes   int `mapstructure:"slp_max_response_bytes"`
+	QueryMaxResponseBytes  int `mapstructure:"query_max_response_bytes"`
+	LoginMaxPacketBytes   int `mapstructure:"login_max_packet_bytes"`
+	MaxStringLength       int `mapstructure:"max_string_length"`
+
+	// Display settings
+	ProgressBarWidth          int `mapstructure:"progress_bar_width"`
+	MaxMotdDisplayLen         int `mapstructure:"max_motd_display_len"`
+	MaxPluginsDisplayLen      int `mapstructure:"max_plugins_display_len"`
+	MaxPlayerNamesDisplayLen  int `mapstructure:"max_player_names_display_len"`
+
+	// Storage settings
+	SQLiteSyncMode string `mapstructure:"sqlite_sync_mode"`
 
 	// Common settings
 	DatabasePath    string `mapstructure:"database_path"`
@@ -70,42 +94,89 @@ const (
 	DefaultProbeQPS     = 100
 	DefaultProbeWorkers = 128
 	DefaultProbeTimeout = 1 * time.Second
+	DefaultProbeLogin   = true
 
 	// Update
 	DefaultUpdateQPS     = 100
 	DefaultUpdateWorkers = 128
 	DefaultUpdateTimeout = 1 * time.Second
 	DefaultUpdateLimit   = 0
+	DefaultUpdateLogin   = true
 
 	// List
-	DefaultListSort  = "recent"
-	DefaultListLimit = 100
+	DefaultListSort      = "recent"
+	DefaultListLimit     = 100
+	DefaultListDateFormat = "02/01/2006 15:04:05" // DD/MM/YYYY HH:mm:ss
+
+	// DefaultListColumns is defined as a var to avoid slice literal in const error
+
+	// Scanner
+	DefaultScannerResultChannelSize = 256
+	DefaultUpdateOpChannelSize      = 128
+	DefaultProgressTickerInterval   = 500 * time.Millisecond
+
+	// Protocol
+	DefaultSLPMaxResponseBytes   = 1 << 20 // 1 MiB
+	DefaultQueryMaxResponseBytes = 4096     // 4 KiB
+	DefaultLoginMaxPacketBytes   = 2 << 20  // 2 MiB
+	DefaultMaxStringLength       = 32767
+
+	// Display
+	DefaultProgressBarWidth        = 30
+	DefaultMaxMotdDisplayLen       = 70
+	DefaultMaxPluginsDisplayLen    = 60
+	DefaultMaxPlayerNamesDisplayLen = 30
+
+	// Storage
+	DefaultSQLiteSyncMode = "NORMAL"
 
 	// Common
 	DefaultEnableQuery = true
 	DefaultExpand     = true
 	DefaultLoginUser  = "Herobrine"
+	DefaultLogin     = true
 	DefaultASCII      = false
 	DefaultResume    = false
 	DefaultDebugLogin = false
+)
 
-	// Internal aliases for setDefaults
-	defaultPorts         = DefaultPorts
-	defaultProbeQPS     = DefaultProbeQPS
-	defaultProbeWorkers = DefaultProbeWorkers
-	defaultProbeTimeout = DefaultProbeTimeout
-	defaultUpdateQPS     = DefaultUpdateQPS
-	defaultUpdateWorkers = DefaultUpdateWorkers
-	defaultUpdateTimeout = DefaultUpdateTimeout
-	defaultUpdateLimit   = DefaultUpdateLimit
-	defaultListSort      = DefaultListSort
-	defaultListLimit     = DefaultListLimit
-	defaultEnableQuery   = DefaultEnableQuery
-	defaultExpand       = DefaultExpand
-	defaultLoginUser    = DefaultLoginUser
-	defaultASCII        = DefaultASCII
-	defaultResume      = DefaultResume
-	defaultDebugLogin  = DefaultDebugLogin
+// DefaultListColumns is defined as a var to avoid slice literal in const error
+var DefaultListColumns = []string{"ordinal", "address", "version", "login", "players", "latency", "last_seen", "motd", "map", "player_names"}
+
+// Internal aliases for setDefaults
+var (
+	defaultPorts                  = DefaultPorts
+	defaultProbeQPS              = DefaultProbeQPS
+	defaultProbeWorkers          = DefaultProbeWorkers
+	defaultProbeTimeout          = DefaultProbeTimeout
+	defaultUpdateQPS              = DefaultUpdateQPS
+	defaultUpdateWorkers          = DefaultUpdateWorkers
+	defaultUpdateTimeout          = DefaultUpdateTimeout
+	defaultUpdateLimit            = DefaultUpdateLimit
+	defaultListSort               = DefaultListSort
+	defaultListLimit              = DefaultListLimit
+	defaultListColumns            = DefaultListColumns
+	defaultListDateFormat        = DefaultListDateFormat
+	defaultScannerResultChannelSize = DefaultScannerResultChannelSize
+	defaultUpdateOpChannelSize     = DefaultUpdateOpChannelSize
+	defaultProgressTickerInterval   = DefaultProgressTickerInterval
+	defaultSLPMaxResponseBytes     = DefaultSLPMaxResponseBytes
+	defaultQueryMaxResponseBytes   = DefaultQueryMaxResponseBytes
+	defaultLoginMaxPacketBytes     = DefaultLoginMaxPacketBytes
+	defaultMaxStringLength         = DefaultMaxStringLength
+	defaultProgressBarWidth        = DefaultProgressBarWidth
+	defaultMaxMotdDisplayLen       = DefaultMaxMotdDisplayLen
+	defaultMaxPluginsDisplayLen    = DefaultMaxPluginsDisplayLen
+	defaultMaxPlayerNamesDisplayLen = DefaultMaxPlayerNamesDisplayLen
+	defaultSQLiteSyncMode          = DefaultSQLiteSyncMode
+	defaultEnableQuery            = DefaultEnableQuery
+	defaultExpand                 = DefaultExpand
+	defaultLoginUser              = DefaultLoginUser
+	defaultProbeLogin            = DefaultProbeLogin
+	defaultUpdateLogin          = DefaultUpdateLogin
+	defaultASCII                  = DefaultASCII
+	defaultResume                = DefaultResume
+	defaultDebugLogin            = DefaultDebugLogin
 )
 
 // Load reads configuration from the layered sources and returns a
@@ -239,16 +310,40 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("probe_qps", defaultProbeQPS)
 	v.SetDefault("probe_workers", defaultProbeWorkers)
 	v.SetDefault("probe_timeout", defaultProbeTimeout)
+	v.SetDefault("probe_login", defaultProbeLogin)
 
 	// Update
 	v.SetDefault("update_qps", defaultUpdateQPS)
 	v.SetDefault("update_workers", defaultUpdateWorkers)
 	v.SetDefault("update_timeout", defaultUpdateTimeout)
 	v.SetDefault("update_limit", defaultUpdateLimit)
+	v.SetDefault("update_login", defaultUpdateLogin)
 
 	// List
 	v.SetDefault("list_sort", defaultListSort)
 	v.SetDefault("list_limit", defaultListLimit)
+	v.SetDefault("list_columns", defaultListColumns)
+	v.SetDefault("list_date_format", defaultListDateFormat)
+
+	// Scanner
+	v.SetDefault("scanner_result_channel_size", defaultScannerResultChannelSize)
+	v.SetDefault("update_op_channel_size", defaultUpdateOpChannelSize)
+	v.SetDefault("progress_ticker_interval", defaultProgressTickerInterval)
+
+	// Protocol
+	v.SetDefault("slp_max_response_bytes", defaultSLPMaxResponseBytes)
+	v.SetDefault("query_max_response_bytes", defaultQueryMaxResponseBytes)
+	v.SetDefault("login_max_packet_bytes", defaultLoginMaxPacketBytes)
+	v.SetDefault("max_string_length", defaultMaxStringLength)
+
+	// Display
+	v.SetDefault("progress_bar_width", defaultProgressBarWidth)
+	v.SetDefault("max_motd_display_len", defaultMaxMotdDisplayLen)
+	v.SetDefault("max_plugins_display_len", defaultMaxPluginsDisplayLen)
+	v.SetDefault("max_player_names_display_len", defaultMaxPlayerNamesDisplayLen)
+
+	// Storage
+	v.SetDefault("sqlite_sync_mode", defaultSQLiteSyncMode)
 
 	// Common
 	v.SetDefault("enable_query", defaultEnableQuery)

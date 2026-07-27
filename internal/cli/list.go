@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
@@ -21,6 +23,27 @@ import (
 var tableHeaders = []string{"#", "ADDRESS", "VERSION", "LOGIN", "PLAYERS", "LATENCY", "LAST SEEN", "MOTD", "MAP"}
 
 var tableWidths = []int{5, 22, 20, 10, 10, 9, 20, 36, 16}
+
+var availableColumns = map[string]struct {
+	header string
+	width  int
+}{
+	"ordinal":   {"#", 5},
+	"address":    {"ADDRESS", 22},
+	"version":    {"VERSION", 20},
+	"login":     {"LOGIN", 10},
+	"players":   {"PLAYERS", 10},
+	"latency":   {"LATENCY", 9},
+	"last_seen": {"LAST SEEN", 20},
+	"motd":      {"MOTD", 36},
+	"map":       {"MAP", 16},
+	"country":     {"COUNTRY", 10},
+	"plugins":     {"PLUGINS", 20},
+	"protocol":    {"PROTOCOL", 10},
+	"player_names": {"PLAYER NAMES", 30},
+}
+
+var emptyCellStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
 func runList(args []string) error {
 	cfg, err := config.Load()
@@ -128,49 +151,136 @@ func runList(args []string) error {
 		return nil
 	}
 
-	printServerTable(os.Stdout, servers)
+	// Validate columns
+	validatedColumns, colWarnings := validateListColumns(cfg.ListColumns)
+	for _, w := range colWarnings {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+	}
+
+	// Validate date format
+	validatedDateFormat, dateWarnings := validateDateFormat(cfg.ListDateFormat)
+	for _, w := range dateWarnings {
+		fmt.Fprintf(os.Stderr, "Warning: %s\n", w)
+	}
+
+	printServerTable(os.Stdout, servers, validatedColumns, validatedDateFormat, cfg)
 	return nil
 }
 
-func printServerTable(w io.Writer, servers []model.Server) {
+func printServerTable(w io.Writer, servers []model.Server, columns []string, dateFormat string, cfg *config.Config) {
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+
+	// Build headers and widths based on selected columns
+	headers := make([]string, len(columns))
+	widths := make([]int, len(columns))
+	for i, col := range columns {
+		info := availableColumns[col]
+		headers[i] = info.header
+		widths[i] = info.width
+	}
 
 	// Build plain string rows.
 	rows := make([][]string, len(servers))
 	for i, s := range servers {
 		motd := s.MOTD
-		if len(motd) > 42 {
-			motd = motd[:39] + "..."
+		if len(motd) > cfg.MaxMotdDisplayLen {
+			motd = motd[:cfg.MaxMotdDisplayLen-3] + "..."
 		}
 		motd = strings.ReplaceAll(motd, "\n", " ")
 
-		rows[i] = []string{
-			fmt.Sprintf("%d", i+1),
-			s.Address(),
-			s.VersionName,
-			loginModeLabel(s.LoginMode),
-			fmt.Sprintf("%d/%d", s.NumPlayers, s.MaxPlayers),
-			fmt.Sprintf("%dms", s.LastLatencyMs),
-			s.LastSeen.Format("2006-01-02 15:04"),
-			motd,
-			s.Map,
+		row := make([]string, len(columns))
+		for j, col := range columns {
+			switch col {
+			case "ordinal":
+				row[j] = fmt.Sprintf("%d", i+1)
+			case "address":
+				row[j] = s.Address()
+			case "version":
+				row[j] = s.VersionName
+			case "login":
+				row[j] = loginModeLabel(s.LoginMode)
+			case "players":
+				row[j] = fmt.Sprintf("%d/%d", s.NumPlayers, s.MaxPlayers)
+			case "latency":
+				row[j] = fmt.Sprintf("%dms", s.LastLatencyMs)
+			case "last_seen":
+				if s.LastSeen.IsZero() {
+					row[j] = "-"
+				} else {
+					row[j] = s.LastSeen.Format(dateFormat)
+				}
+			case "motd":
+				row[j] = motd
+			case "map":
+				row[j] = s.Map
+				if row[j] == "" {
+					row[j] = "-"
+				}
+			case "country":
+				row[j] = s.Country
+				if row[j] == "" {
+					row[j] = "-"
+				}
+			case "plugins":
+				if len(s.Plugins) == 0 {
+					row[j] = "-"
+				} else {
+					pluginNames := make([]string, len(s.Plugins))
+					for i, p := range s.Plugins {
+						pluginNames[i] = p.Name
+					}
+					row[j] = strings.Join(pluginNames, ", ")
+				}
+			case "protocol":
+				row[j] = fmt.Sprintf("%d", s.VersionProtocol)
+				if row[j] == "0" {
+					row[j] = "-"
+				}
+			case "player_names":
+				if len(s.SamplePlayers) == 0 {
+					row[j] = "-"
+				} else {
+					names := make([]string, len(s.SamplePlayers))
+					for k, p := range s.SamplePlayers {
+						names[k] = p.Name
+					}
+					joined := strings.Join(names, ", ")
+					if len(joined) > cfg.MaxPlayerNamesDisplayLen {
+						joined = joined[:cfg.MaxPlayerNamesDisplayLen-3] + "..."
+					}
+					row[j] = joined
+				}
+			default:
+				row[j] = "-"
+			}
 		}
+		rows[i] = row
 	}
+
+	// Find column indices for styling
+	playersColIdx := slices.Index(columns, "players")
+	latencyColIdx := slices.Index(columns, "latency")
 
 	// StyleFunc applies per-cell width + conditional colors.
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
 		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("240"))).
-		Headers(tableHeaders...).
+		Headers(headers...).
 		Rows(rows...).
 		StyleFunc(func(row, col int) lipgloss.Style {
-			s := lipgloss.NewStyle().Width(tableWidths[col])
+			if col >= len(widths) {
+				return lipgloss.NewStyle()
+			}
+			s := lipgloss.NewStyle().Width(widths[col])
 
 			// Header row: bold + white.
 			if row == table.HeaderRow {
 				return s.Foreground(lipgloss.Color("252")).Bold(true)
 			}
 
+			if row < 0 || row >= len(servers) {
+				return s
+			}
 			server := servers[row]
 
 			// Ordinal column: dim.
@@ -178,13 +288,18 @@ func printServerTable(w io.Writer, servers []model.Server) {
 				return s.Foreground(lipgloss.Color("245"))
 			}
 
+			// Empty cell: dim
+			if col < len(rows[row]) && rows[row][col] == "-" {
+				return s.Foreground(lipgloss.Color("240"))
+			}
+
 			// Players column: green when > 0.
-			if col == 4 && server.NumPlayers > 0 {
+			if col == playersColIdx && server.NumPlayers > 0 {
 				return s.Foreground(lipgloss.Color("42")).Bold(true)
 			}
 
 			// Latency column: color gradient.
-			if col == 5 {
+			if col == latencyColIdx {
 				return s.Foreground(latencyColor(server.LastLatencyMs))
 			}
 
@@ -194,6 +309,41 @@ func printServerTable(w io.Writer, servers []model.Server) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, t.Render())
 	fmt.Fprintf(w, "  %s\n\n", dimStyle.Render(fmt.Sprintf("%d server(s) found", len(servers))))
+}
+
+func validateListColumns(columns []string) ([]string, []string) {
+	var validCols []string
+	var warnings []string
+
+	allCols := make(map[string]bool)
+	for col := range availableColumns {
+		allCols[col] = true
+	}
+
+	for _, col := range columns {
+		if allCols[col] {
+			validCols = append(validCols, col)
+		} else {
+			warnings = append(warnings, fmt.Sprintf("unknown column: %s (ignoring)", col))
+		}
+	}
+
+	if len(validCols) == 0 {
+		warnings = append(warnings, "no valid columns specified, using defaults")
+		validCols = config.DefaultListColumns
+	}
+
+	return validCols, warnings
+}
+
+func validateDateFormat(format string) (string, []string) {
+	// Test if the format can be parsed
+	now := time.Now()
+	_, err := time.Parse(format, now.Format(format))
+	if err != nil {
+		return config.DefaultListDateFormat, []string{fmt.Sprintf("invalid date format: %s (using default)", format)}
+	}
+	return format, nil
 }
 
 func loginModeLabel(mode string) string {

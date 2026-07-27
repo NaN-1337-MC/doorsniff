@@ -107,7 +107,7 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	fs.StringVar(&seedsFlag, "seeds", "", "override seeds directory")
 	fs.StringVar(&fileFlag, "file", "", "read seeds from a single file instead of the seeds directory")
 	fs.BoolVar(&resumeFlag, "resume", cfg.Resume, "skip seeds that were fully scanned in a previous run")
-	fs.BoolVar(&loginFlag, "login", false, "perform login handshake to detect online/offline mode")
+	fs.BoolVar(&loginFlag, "login", cfg.ProbeLogin, "perform login handshake to detect online/offline mode")
 	fs.StringVar(&loginUserFlag, "login-user", cfg.LoginUser, "username for login handshake")
 
 	if err := fs.Parse(args); err != nil {

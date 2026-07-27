@@ -67,7 +67,7 @@ func runUpdate(args []string) error {
 	fs.DurationVar(&timeoutFlag, "timeout", cfg.UpdateTimeout, "per-probe timeout")
 	fs.IntVar(&limitFlag, "limit", cfg.UpdateLimit, "max servers to update (0 = all)")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
-	fs.BoolVar(&loginFlag, "login", false, "perform login handshake to detect online/offline mode")
+	fs.BoolVar(&loginFlag, "login", cfg.UpdateLogin, "perform login handshake to detect online/offline mode")
 	fs.StringVar(&loginUserFlag, "login-user", cfg.LoginUser, "username for login handshake")
 	fs.BoolVar(&debugLoginFlag, "debug-login", cfg.DebugLogin, "dump raw login packet bytes + disconnect reasons to stderr (debug)")
 	fs.BoolVar(&asciiFlag, "ascii", cfg.ASCII, "plain output (no colour, ASCII border and bar)")
