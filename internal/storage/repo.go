@@ -223,6 +223,17 @@ type ListQuery struct {
 	PortHi        uint16   // 0 = no filter
 	OrderBy       string   // SQL ORDER BY fragment, default "last_seen DESC"
 	Limit         int      // 0 = default 50
+
+	// New filters
+	Player      []string  // player name substrings (OR'd, searches in sample_players JSON)
+	Map         string    // map name substring
+	Country     string    // country substring
+	LatencySQL  string    // raw SQL fragment for latency filter
+	LatencyArgs []any     // args for LatencySQL
+	Since       *time.Time // servers seen after this time
+	Plugin      []string  // plugin name substrings (OR'd, searches in plugins JSON)
+	Protocol    *int      // version_protocol exact match
+	Address     string    // IP address substring
 }
 
 // ListServersFiltered executes a flexible query built from ListQuery.
@@ -288,6 +299,62 @@ func (r *Repository) ListServersFiltered(ctx context.Context, q ListQuery) ([]mo
 			conds = append(conds, "port BETWEEN ? AND ?")
 			args = append(args, q.PortLo, q.PortHi)
 		}
+	}
+
+	// Player name filter (searches in sample_players JSON).
+	if len(q.Player) > 0 {
+		var parts []string
+		for _, p := range q.Player {
+			parts = append(parts, "sample_players LIKE ?")
+			args = append(args, "%\"name\":\"%"+p+"%")
+		}
+		conds = append(conds, "("+strings.Join(parts, " OR ")+")")
+	}
+
+	// Map filter.
+	if q.Map != "" {
+		conds = append(conds, "LOWER(map) LIKE ?")
+		args = append(args, "%"+strings.ToLower(q.Map)+"%")
+	}
+
+	// Country filter.
+	if q.Country != "" {
+		conds = append(conds, "LOWER(country) LIKE ?")
+		args = append(args, "%"+strings.ToLower(q.Country)+"%")
+	}
+
+	// Latency filter.
+	if q.LatencySQL != "" {
+		conds = append(conds, q.LatencySQL)
+		args = append(args, q.LatencyArgs...)
+	}
+
+	// Since filter (last_seen >= timestamp).
+	if q.Since != nil {
+		conds = append(conds, "last_seen >= ?")
+		args = append(args, *q.Since)
+	}
+
+	// Plugin filter (searches in plugins JSON).
+	if len(q.Plugin) > 0 {
+		var parts []string
+		for _, p := range q.Plugin {
+			parts = append(parts, "plugins LIKE ?")
+			args = append(args, "%\"name\":\"%"+p+"%")
+		}
+		conds = append(conds, "("+strings.Join(parts, " OR ")+")")
+	}
+
+	// Protocol filter.
+	if q.Protocol != nil {
+		conds = append(conds, "version_protocol = ?")
+		args = append(args, *q.Protocol)
+	}
+
+	// Address filter (IP substring).
+	if q.Address != "" {
+		conds = append(conds, "ip LIKE ?")
+		args = append(args, "%"+q.Address+"%")
 	}
 
 	where := ""

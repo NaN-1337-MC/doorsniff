@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // PlayerFilter represents a parsed player count predicate.
@@ -215,4 +216,117 @@ func ParseSortKey(s string) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid sort key %q (valid: players, latency, version, port, recent, oldest, login)", s)
 	}
+}
+
+// ParseSinceFilter parses a time filter string.
+// Supported formats:
+//   - Duration: "1h", "30m", "48h" (relative to now, use hours for days)
+//   - Unix timestamp: "1700000000"
+//   - RFC3339/ISO date: "2024-01-15", "2024-01-15T15:00:00Z"
+func ParseSinceFilter(s string) (*time.Time, error) {
+	if s == "" {
+		return nil, nil
+	}
+
+	// Try duration format (1h, 30m, 48h, etc.)
+	// Note: Go ParseDuration doesn't support "d" directly, so we convert
+	if strings.HasSuffix(s, "h") || strings.HasSuffix(s, "m") {
+		d, err := time.ParseDuration(s)
+		if err == nil {
+			t := time.Now().Add(-d)
+			return &t, nil
+		}
+	}
+
+	// Handle "d" suffix (days) by converting to hours
+	if strings.HasSuffix(s, "d") {
+		daysStr := strings.TrimSuffix(s, "d")
+		days, err := strconv.Atoi(daysStr)
+		if err == nil {
+			d := time.Duration(days*24) * time.Hour
+			t := time.Now().Add(-d)
+			return &t, nil
+		}
+	}
+
+	// Try Unix timestamp
+	if strings.TrimSpace(s) == strings.TrimLeft(strings.TrimSpace(s), "0123456789") && s != "" {
+		// All digits - try as unix timestamp
+		unix, err := strconv.ParseInt(s, 10, 64)
+		if err == nil {
+			t := time.Unix(unix, 0)
+			return &t, nil
+		}
+	}
+
+	// Try RFC3339 / ISO date formats
+	for _, format := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	} {
+		t, err := time.Parse(format, s)
+		if err == nil {
+			return &t, nil
+		}
+	}
+
+	return nil, fmt.Errorf("invalid --since format %q (valid: 1h, 2d, unix timestamp, or ISO date)", s)
+}
+
+// ParsePlayerNames parses a comma-separated list of player name substrings.
+func ParsePlayerNames(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ParsePluginNames parses a comma-separated list of plugin name substrings.
+func ParsePluginNames(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ParseProtocol parses a protocol filter: "765" or "760-780".
+// Returns nil if no filter.
+// Note: range syntax (e.g., "760-780") is accepted but only lower bound is used for now.
+func ParseProtocol(s string) (*int, error) {
+	if s == "" {
+		return nil, nil
+	}
+	if idx := strings.Index(s, "-"); idx > 0 {
+		lo, err := strconv.Atoi(s[:idx])
+		if err != nil {
+			return nil, fmt.Errorf("invalid protocol filter %q: bad lower bound", s)
+		}
+		_, err = strconv.Atoi(s[idx+1:])
+		if err != nil {
+			return nil, fmt.Errorf("invalid protocol filter %q: bad upper bound", s)
+		}
+		return &lo, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return nil, fmt.Errorf("invalid protocol filter %q: not a number", s)
+	}
+	return &n, nil
 }

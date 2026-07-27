@@ -65,6 +65,14 @@ func runList(args []string) error {
 		sortFlag       string
 		limitFlag      int
 		databaseFlag   string
+		playerFlag     string
+		mapFlag        string
+		countryFlag    string
+		latencyFlag    string
+		sinceFlag      string
+		pluginFlag     string
+		protocolFlag   string
+		addressFlag    string
 	)
 
 	fs.StringVar(&versionFlag, "version", "", "filter by version (e.g. 1.21.1 or 1.21.1,26.1.2)")
@@ -77,6 +85,14 @@ func runList(args []string) error {
 	fs.StringVar(&sortFlag, "sort", cfg.ListSort, "sort by: players, latency, version, port, recent, oldest, login")
 	fs.IntVar(&limitFlag, "limit", cfg.ListLimit, "max results to show (0 = no limit)")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
+	fs.StringVar(&playerFlag, "player", "", "filter by player name (substring match, comma-separated for OR)")
+	fs.StringVar(&mapFlag, "map", "", "filter by map/world name (substring match)")
+	fs.StringVar(&countryFlag, "country", "", "filter by country (substring match)")
+	fs.StringVar(&latencyFlag, "latency", "", "filter by latency in ms (e.g. <100, 50-200, >300)")
+	fs.StringVar(&sinceFlag, "since", "", "filter by last seen (e.g. 1h, 2d, unix timestamp, or ISO date)")
+	fs.StringVar(&pluginFlag, "plugin", "", "filter by plugin name (substring match, comma-separated for OR)")
+	fs.StringVar(&protocolFlag, "protocol", "", "filter by protocol version (exact match)")
+	fs.StringVar(&addressFlag, "address", "", "filter by IP address (substring match)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -110,6 +126,25 @@ func runList(args []string) error {
 
 	versions := ParseVersionList(versionFlag)
 
+	latencyFilter, err := ParsePlayerFilter(latencyFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --latency: %w", err)
+	}
+	latencySQL, latencyArgs := latencyFilter.ToSQLColumn("last_latency_ms")
+
+	sinceTime, err := ParseSinceFilter(sinceFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --since: %w", err)
+	}
+
+	protocol, err := ParseProtocol(protocolFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --protocol: %w", err)
+	}
+
+	playerNames := ParsePlayerNames(playerFlag)
+	pluginNames := ParsePluginNames(pluginFlag)
+
 	dbPath := cfg.DatabasePath
 	if databaseFlag != "" {
 		dbPath = databaseFlag
@@ -127,18 +162,27 @@ func runList(args []string) error {
 	repo := storage.NewRepository(db)
 
 	query := storage.ListQuery{
-		PlayerSQL:    playerSQL,
-		PlayerArgs:   playerArgs,
-		MaxPlayerSQL: maxPlayerSQL,
+		PlayerSQL:     playerSQL,
+		PlayerArgs:    playerArgs,
+		MaxPlayerSQL:  maxPlayerSQL,
 		MaxPlayerArgs: maxPlayerArgs,
-		Versions:     versions,
-		Engine:       engineFlag,
-		MOTD:         motdFlag,
-		LoginMode:    normalizeLoginMode(loginModeFlag),
-		PortLo:       portLo,
-		PortHi:       portHi,
-		OrderBy:      orderBy,
-		Limit:        limitFlag,
+		Versions:      versions,
+		Engine:        engineFlag,
+		MOTD:          motdFlag,
+		LoginMode:     normalizeLoginMode(loginModeFlag),
+		PortLo:        portLo,
+		PortHi:        portHi,
+		OrderBy:       orderBy,
+		Limit:         limitFlag,
+		Player:        playerNames,
+		Map:           mapFlag,
+		Country:       countryFlag,
+		LatencySQL:    latencySQL,
+		LatencyArgs:   latencyArgs,
+		Since:         sinceTime,
+		Plugin:        pluginNames,
+		Protocol:      protocol,
+		Address:       addressFlag,
 	}
 
 	servers, err := repo.ListServersFiltered(ctx, query)
@@ -406,22 +450,33 @@ func listUsage() string {
 	b.WriteString("doorsniff list — query and display found servers\n\n")
 	b.WriteString("Usage:\n  doorsniff list [flags]\n\n")
 	b.WriteString("Flags:\n")
-	b.WriteString("  --version VER   filter by version, comma-separated (e.g. 1.21.1,26.1.2)\n")
-	b.WriteString("  --engine ENG    filter by engine, case-insensitive (e.g. paper, purpur)\n")
-	b.WriteString("  --players EXPR  filter by player count (e.g. >1, 1-10, <50)\n")
+	b.WriteString("  --version VER    filter by version, comma-separated (e.g. 1.21.1,26.1.2)\n")
+	b.WriteString("  --engine ENG     filter by engine, case-insensitive (e.g. paper, purpur)\n")
+	b.WriteString("  --players EXPR   filter by player count (e.g. >1, 1-10, <50)\n")
 	b.WriteString("  --maxplayers EXPR filter by max players (e.g. >=100, 50-200)\n")
-	b.WriteString("  --port PORT     filter by port or range (e.g. 25565 or 25500-25600)\n")
-	b.WriteString("  --motd TEXT     search MOTD for keywords\n")
-	b.WriteString("  --login MODE   filter by login mode (cracked, premium, whitelist, banned, kicked, full)\n")
-	b.WriteString("  --sort KEY      sort by: players, latency, version, port, recent, oldest, login\n")
-	b.WriteString("  --limit N       max results (0 = no limit)\n")
-	b.WriteString("  --database PATH override database path\n")
-	b.WriteString("\nPlayer filter operators: =, >, <, >=, <=, - (range)\n")
+	b.WriteString("  --port PORT      filter by port or range (e.g. 25565 or 25500-25600)\n")
+	b.WriteString("  --motd TEXT      search MOTD for keywords\n")
+	b.WriteString("  --login MODE     filter by login mode (cracked, premium, whitelist, banned, kicked, full)\n")
+	b.WriteString("  --sort KEY       sort by: players, latency, version, port, recent, oldest, login\n")
+	b.WriteString("  --limit N        max results (0 = no limit)\n")
+	b.WriteString("  --database PATH  override database path\n")
+	b.WriteString("  --player TEXT    filter by player name (substring, comma-separated for OR)\n")
+	b.WriteString("  --map TEXT       filter by map/world name (substring)\n")
+	b.WriteString("  --country TEXT   filter by country (substring)\n")
+	b.WriteString("  --latency EXPR   filter by latency in ms (e.g. <100, 50-200, >300)\n")
+	b.WriteString("  --since DURATION filter by last seen (e.g. 1h, 48h, unix timestamp, or ISO date)\n")
+	b.WriteString("  --plugin TEXT    filter by plugin name (substring, comma-separated for OR)\n")
+	b.WriteString("  --protocol N     filter by protocol version (exact match)\n")
+	b.WriteString("  --address TEXT   filter by IP address (substring)\n")
+	b.WriteString("\nFilter operators for counts: =, >, <, >=, <=, - (range)\n")
 	b.WriteString("Examples:\n")
 	b.WriteString("  doorsniff list\n")
 	b.WriteString("  doorsniff list --version=1.21.1 --engine=paper --players='>1'\n")
 	b.WriteString("  doorsniff list --players='1-10' --sort=players\n")
 	b.WriteString("  doorsniff list --login=cracked\n")
 	b.WriteString("  doorsniff list --sort=login\n")
+	b.WriteString("  doorsniff list --player Notch,Herobrine\n")
+	b.WriteString("  doorsniff list --map world --since 2d\n")
+	b.WriteString("  doorsniff list --latency <200 --country US\n")
 	return b.String()
 }
