@@ -1,4 +1,4 @@
-# Default seeds for swoomps.
+# Default seeds for doorsniff.
 # One host per line. Accepts "hostname", "hostname:port", "ip", or "ip:port".
 # These are well-known public Minecraft servers used as starting points for
 # the scanner. Add or remove freely.

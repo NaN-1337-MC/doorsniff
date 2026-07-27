@@ -13,14 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/renanbray/swoomps/internal/config"
-	"github.com/renanbray/swoomps/internal/model"
-	"github.com/renanbray/swoomps/internal/scanner"
-	"github.com/renanbray/swoomps/internal/storage"
+	"github.com/renanbray/doorsniff/internal/config"
+	"github.com/renanbray/doorsniff/internal/model"
+	"github.com/renanbray/doorsniff/internal/scanner"
+	"github.com/renanbray/doorsniff/internal/storage"
 )
 
 // probeConfig is the fully-resolved configuration for a single
-// `swoomps probe` invocation. It is the result of merging CLI
+// `doorsniff probe` invocation. It is the result of merging CLI
 // flags, environment, and the user config file, and the input
 // to the rest of the probe pipeline.
 type probeConfig struct {
@@ -39,7 +39,7 @@ type probeConfig struct {
 	loginUser   string
 }
 
-// runProbe is the entry point for `swoomps probe`. It loads config,
+// runProbe is the entry point for `doorsniff probe`. It loads config,
 // opens the database, kicks off the scanner against the seeds
 // directory, and prints a summary on exit.
 func runProbe(args []string) error {
@@ -73,6 +73,11 @@ func runProbe(args []string) error {
 // single probeConfig. It does not open the database or start any
 // goroutines — pure parsing.
 func parseProbeFlags(args []string) (*probeConfig, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+
 	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -91,19 +96,19 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 		loginFlag        bool
 		loginUserFlag    string
 	)
-	fs.StringVar(&portsFlag, "ports", "1-65535", "port range, e.g. 25565, 25500-25600, 1-65535")
-	fs.IntVar(&qpsFlag, "qps", 200, "global QPS limit")
-	fs.IntVar(&workersFlag, "workers", 256, "worker pool size")
-	fs.DurationVar(&timeoutFlag, "timeout", 1*time.Second, "per-probe timeout")
+	fs.StringVar(&portsFlag, "ports", cfg.Ports, "port range, e.g. 25565, 25500-25600, 1-65535")
+	fs.IntVar(&qpsFlag, "qps", cfg.ProbeQPS, "global QPS limit")
+	fs.IntVar(&workersFlag, "workers", cfg.ProbeWorkers, "worker pool size")
+	fs.DurationVar(&timeoutFlag, "timeout", cfg.ProbeTimeout, "per-probe timeout")
 	fs.BoolVar(&verboseFlag, "verbose", false, "verbose (per-target error lines + debug logging)")
 	fs.BoolVar(&verboseShortFlag, "v", false, "short alias for --verbose")
-	fs.BoolVar(&asciiFlag, "ascii", false, "plain output (no colour, ASCII border and bar)")
+	fs.BoolVar(&asciiFlag, "ascii", cfg.ASCII, "plain output (no colour, ASCII border and bar)")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
 	fs.StringVar(&seedsFlag, "seeds", "", "override seeds directory")
 	fs.StringVar(&fileFlag, "file", "", "read seeds from a single file instead of the seeds directory")
-	fs.BoolVar(&resumeFlag, "resume", false, "skip seeds that were fully scanned in a previous run")
+	fs.BoolVar(&resumeFlag, "resume", cfg.Resume, "skip seeds that were fully scanned in a previous run")
 	fs.BoolVar(&loginFlag, "login", false, "perform login handshake to detect online/offline mode")
-	fs.StringVar(&loginUserFlag, "login-user", "Herobrine", "username for login handshake")
+	fs.StringVar(&loginUserFlag, "login-user", cfg.LoginUser, "username for login handshake")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -116,11 +121,6 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	lo, hi, err := scanner.ParsePortRange(portsFlag)
 	if err != nil {
 		return nil, fmt.Errorf("parsing --ports: %w", err)
-	}
-
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, fmt.Errorf("loading config: %w", err)
 	}
 
 	seedsDir := cfg.SeedsDir
@@ -279,21 +279,21 @@ func printSummary(w io.Writer, stats *scanner.Stats, dbPath string, styles *scan
 
 func probeUsage() string {
 	var b strings.Builder
-	b.WriteString("swoomps probe — run a scan against the configured seeds\n\n")
-	b.WriteString("Usage:\n  swoomps probe [flags]\n\n")
+	b.WriteString("doorsniff probe — run a scan against the configured seeds\n\n")
+	b.WriteString("Usage:\n  doorsniff probe [flags]\n\n")
 	b.WriteString("Flags:\n")
-	b.WriteString("  --ports RANGE       port range (default 1-65535)\n")
-	b.WriteString("  --qps N             global QPS limit (default 200)\n")
-	b.WriteString("  --workers N         worker pool size (default 256)\n")
-	b.WriteString("  --timeout DUR       per-probe timeout (default 1s)\n")
+	b.WriteString(fmt.Sprintf("  --ports RANGE       port range (default %s)\n", config.DefaultPorts))
+	b.WriteString(fmt.Sprintf("  --qps N             global QPS limit (default %d)\n", config.DefaultProbeQPS))
+	b.WriteString(fmt.Sprintf("  --workers N         worker pool size (default %d)\n", config.DefaultProbeWorkers))
+	b.WriteString(fmt.Sprintf("  --timeout DUR       per-probe timeout (default %s)\n", config.DefaultProbeTimeout))
 	b.WriteString("  --file PATH         read seeds from a single file\n")
-	b.WriteString("  --resume            skip seeds fully scanned in a previous run\n")
+	b.WriteString("  --resume            skip seeds that were fully scanned in a previous run\n")
 	b.WriteString("  --seeds DIR         override seeds directory\n")
 	b.WriteString("  --database PATH     override database path\n")
 	b.WriteString("  --verbose, -v       show per-target error lines (timeouts, SLP failures)\n")
 	b.WriteString("  --ascii             plain output (no colour, ASCII border and bar)\n")
 	b.WriteString("  --login             perform login handshake to detect online/offline mode\n")
-	b.WriteString("  --login-user STR    username for login handshake (default Herobrine)\n")
+	b.WriteString(fmt.Sprintf("  --login-user STR    username for login handshake (default %s)\n", config.DefaultLoginUser))
 	return b.String()
 }
 

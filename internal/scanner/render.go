@@ -10,7 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
-	"github.com/renanbray/swoomps/internal/model"
+	"github.com/renanbray/doorsniff/internal/model"
 )
 
 // Styles groups every lipgloss style used by the live output. Two

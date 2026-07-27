@@ -35,7 +35,7 @@ six top-level subcommands (`probe`, `scan`, `tui`, `list`, `seed`,
 `init`), each with its own set of flags. A single root `FlagSet` would
 have grown past 20 flags with overlaps and aliases. Subcommands keep
 each surface small and self-contained, at the cost of typing
-`swoomps probe` instead of `swoomps --scan`.
+`doorsniff probe` instead of `doorsniff --scan`.
 
 Cobra is the de-facto standard for this, but the surface is still
 small enough that the `flag` package per subcommand wins on
@@ -45,20 +45,20 @@ becomes a requirement, Cobra is the next move.
 ## Module layout
 
 ```
-github.com/renanbray/swoomps
+github.com/renanbray/doorsniff
 ├── cmd/
-│   └── swoomps/
+│   └── doorsniff/
 │       └── main.go              # entry point; calls cli.Run
 ├── internal/
 │   ├── cli/                     # subcommand surface
-│   │   ├── dispatch.go          # routes `swoomps <cmd>` to the right handler
-│   │   ├── probe.go             # `swoomps probe` — run a scan
-│   │   ├── list.go              # `swoomps list` — query and display found servers
+│   │   ├── dispatch.go          # routes `doorsniff <cmd>` to the right handler
+│   │   ├── probe.go             # `doorsniff probe` — run a scan
+│   │   ├── list.go              # `doorsniff list` — query and display found servers
 │   │   ├── listfilter.go        # filter parsers for `list`
-│   │   ├── scan.go              # `swoomps scan` (stub)
-│   │   ├── tui.go               # `swoomps tui` (stub)
-│   │   ├── seed.go              # `swoomps seed` (stub)
-│   │   └── init.go              # `swoomps init` (stub)
+│   │   ├── scan.go              # `doorsniff scan` (stub)
+│   │   ├── tui.go               # `doorsniff tui` (stub)
+│   │   ├── seed.go              # `doorsniff seed` (stub)
+│   │   └── init.go              # `doorsniff init` (stub)
 │   ├── scanner/                 # orchestration
 │   │   ├── scanner.go           # RunScan, Options, generateTargets
 │   │   ├── pool.go              # worker pool + rate limiter + Stats
@@ -105,7 +105,7 @@ github.com/renanbray/swoomps
 `internal/` keeps the package surface from being importable by other
 modules — appropriate for an application.
 
-## Data flow (`swoomps probe`)
+## Data flow (`doorsniff probe`)
 
 ```
                         FLAG PARSING (probe.go)
@@ -221,7 +221,7 @@ the same move, prints the found-server card, and reprints the bars.
 
 ## Resume
 
-When `swoomps probe --resume` is invoked, the scanner:
+When `doorsniff probe --resume` is invoked, the scanner:
 
 1. Loads `scan_progress` into a `map[seed_ip]last_port` from the DB.
 2. Strips fully-completed seeds from the seed list.
@@ -243,7 +243,7 @@ Viper resolves in this order (first set wins):
 1. explicit `Set` (programmatic)
 2. bound flag
 3. env var (`SWOOMPS_*`)
-4. config file (`~/.config/swoomps/config.yaml`)
+4. config file (`~/.config/doorsniff/config.yaml`)
 5. default in code
 
 `SetEnvPrefix("SWOOMPS")`, `SetEnvKeyReplacer(...)`, and
@@ -252,9 +252,9 @@ breaks nested-key resolution.
 
 ## TUI design (planned)
 
-The dashboard is a single Bubble Tea program under `swoomps tui`. It
+The dashboard is a single Bubble Tea program under `doorsniff tui`. It
 reads from the database and from the in-memory `ProgressState` shared
-by `swoomps probe`. The four Golden Rules from the bubbletea skill
+by `doorsniff probe`. The four Golden Rules from the bubbletea skill
 apply:
 
 - always account for borders in height calculations
@@ -321,7 +321,7 @@ network or external services.
 
 ## Distribution
 
-Single static binary. `go build -o swoomps ./cmd/swoomps`. No Docker
+Single static binary. `go build -o doorsniff ./cmd/doorsniff`. No Docker
 image yet; the user has a Linux box and a Go toolchain.
 
 ## Future hooks
@@ -330,7 +330,7 @@ image yet; the user has a Linux box and a Go toolchain.
   would scale to multiple binaries running in parallel.
 - A separate `cmd/indexer` could replay the SQLite database into a
   search index without touching the scanner.
-- A `--format json` flag on `swoomps list` would feed downstream
+- A `--format json` flag on `doorsniff list` would feed downstream
   pipelines.
 - The TUI inherits the same data source, so adding it is additive.
 - An `--on-found` webhook hook would need `worker` to be a struct,

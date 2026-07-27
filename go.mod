@@ -1,4 +1,4 @@
-module github.com/renanbray/swoomps
+module github.com/renanbray/doorsniff
 
 go 1.26.4
 

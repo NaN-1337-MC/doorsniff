@@ -9,39 +9,39 @@
 ## Build
 
 ```bash
-go build -o swoomps ./cmd/swoomps
+go build -o doorsniff ./cmd/doorsniff
 ```
 
-The binary lands at `./swoomps`. To install it system-wide:
+The binary lands at `./doorsniff`. To install it system-wide:
 
 ```bash
-go build -o swoomps ./cmd/swoomps
-sudo cp swoomps /usr/local/bin/
+go build -o doorsniff ./cmd/doorsniff
+sudo cp doorsniff /usr/local/bin/
 ```
 
-Or `go install ./cmd/swoomps` to drop it into `$GOBIN`.
+Or `go install ./cmd/doorsniff` to drop it into `$GOBIN`.
 
 ## Subcommand CLI
 
 The CLI is subcommand-based. Every action is a subcommand of
-`swoomps`:
+`doorsniff`:
 
 | Subcommand | Purpose |
 |---|---|
-| `swoomps probe` | Run a scan against the seeds directory or a file |
-| `swoomps list` | Query the database of found servers |
-| `swoomps update` | Re-probe known servers to refresh their data |
-| `swoomps init` | Initialize config and database |
-| `swoomps tui` | Live dashboard (em breve) |
-| `swoomps seed` | Manage seeds (em breve) |
-| `swoomps version` | Print version |
-| `swoomps help <sub>` | Subcommand-specific help |
+| `doorsniff probe` | Run a scan against the seeds directory or a file |
+| `doorsniff list` | Query the database of found servers |
+| `doorsniff update` | Re-probe known servers to refresh their data |
+| `doorsniff init` | Initialize config and database |
+| `doorsniff tui` | Live dashboard (em breve) |
+| `doorsniff seed` | Manage seeds (em breve) |
+| `doorsniff version` | Print version |
+| `doorsniff help <sub>` | Subcommand-specific help |
 
 `tui` and `seed` are stubs. They print a "not implemented yet"
 message today. The stable surface is `probe`, `list`, `update`, and
 `init`.
 
-## `swoomps probe`
+## `doorsniff probe`
 
 Runs a scan.
 
@@ -62,19 +62,19 @@ Runs a scan.
 
 ```bash
 # Run a scan against all seeds in the XDG seeds directory.
-swoomps probe
+doorsniff probe
 
 # Run a scan against a single seed file.
-swoomps probe --file ./seed.txt
+doorsniff probe --file ./seed.txt
 
 # Narrow the port range and lower the QPS.
-swoomps probe --file ./seed.txt --ports 25565 --qps 50
+doorsniff probe --file ./seed.txt --ports 25565 --qps 50
 
 # Full port range with 256 workers and 1s timeout.
-swoomps probe --file ./seed.txt --ports 1-65535 --qps 200 --workers 256
+doorsniff probe --file ./seed.txt --ports 1-65535 --qps 200 --workers 256
 
 # Resume an interrupted scan.
-swoomps probe --file ./seed.txt --resume
+doorsniff probe --file ./seed.txt --resume
 ```
 
 A bundled `seed.txt` ships with hosting provider ranges. Each line is
@@ -120,7 +120,7 @@ label and IP sit at the end of the first line.
 `Ctrl+C` stops the scan. Results written so far are persisted; use
 `--resume` to continue.
 
-## `swoomps list`
+## `doorsniff list`
 
 Queries and displays found servers. The output is a lipgloss-rendered
 table with conditional colours (green when players > 0; latency on a
@@ -153,19 +153,19 @@ gradient from green to red).
 
 ```bash
 # Last 50 servers seen.
-swoomps list
+doorsniff list
 
 # Paper servers with 10+ players, sorted by player count.
-swoomps list --engine paper --players '>10' --sort players
+doorsniff list --engine paper --players '>10' --sort players
 
 # 1.21.1 servers on non-default ports.
-swoomps list --version 1.21.1 --port '25566-26000'
+doorsniff list --version 1.21.1 --port '25566-26000'
 
 # Servers with "survival" in the MOTD.
-swoomps list --motd survival
+doorsniff list --motd survival
 ```
 
-## `swoomps update`
+## `doorsniff update`
 
 Re-probes known servers to refresh their data. Selects servers from
 the database using the same filters as `list`, then re-dials each
@@ -192,29 +192,29 @@ one to get fresh player counts, MOTD, and version info.
 
 ```bash
 # Update all known servers.
-swoomps update
+doorsniff update
 
 # Update only Paper servers with players.
-swoomps update --engine paper --players '>0'
+doorsniff update --engine paper --players '>0'
 
 # Update with login handshake detection.
-swoomps update --login
+doorsniff update --login
 
 # Update max 100 servers on non-default ports.
-swoomps update --port '25500-25600' --limit 100
+doorsniff update --port '25500-25600' --limit 100
 ```
 
 ## Configuration
 
-The config file is YAML at `~/.config/swoomps/config.yaml`. Keys:
+The config file is YAML at `~/.config/doorsniff/config.yaml`. Keys:
 
 ```yaml
 qps: 200
 workers: 256
 timeout: 1s
 ports: 1-65535
-database_path: /home/you/.local/share/swoomps/swoomps.db
-seeds_dir: /home/you/.config/swoomps/seeds
+database_path: /home/you/.local/share/doorsniff/doorsniff.db
+seeds_dir: /home/you/.config/doorsniff/seeds
 enable_query: true
 enable_expansion: true
 verbose: false
@@ -241,10 +241,10 @@ go mod tidy               # clean module graph
 | `SWOOMPS_WORKERS` | `workers` | 256 |
 | `SWOOMPS_TIMEOUT` | `timeout` | 1s |
 | `SWOOMPS_PORTS` | `ports` | 1-65535 |
-| `SWOOMPS_DATABASE_PATH` | `database_path` | `$XDG_DATA_HOME/swoomps/swoomps.db` |
-| `SWOOMPS_SEEDS_DIR` | `seeds_dir` | `$XDG_CONFIG_HOME/swoomps/seeds` |
-| `SWOOMPS_CONFIG_PATH` | `config_path` | `$XDG_CONFIG_HOME/swoomps/config.yaml` |
-| `SWOOMPS_DATA_PATH` | (db dir) | `$XDG_DATA_HOME/swoomps` |
+| `SWOOMPS_DATABASE_PATH` | `database_path` | `$XDG_DATA_HOME/doorsniff/doorsniff.db` |
+| `SWOOMPS_SEEDS_DIR` | `seeds_dir` | `$XDG_CONFIG_HOME/doorsniff/seeds` |
+| `SWOOMPS_CONFIG_PATH` | `config_path` | `$XDG_CONFIG_HOME/doorsniff/config.yaml` |
+| `SWOOMPS_DATA_PATH` | (db dir) | `$XDG_DATA_HOME/doorsniff` |
 | `SWOOMPS_VERBOSE` | `verbose` | false |
 
 ## Troubleshooting
@@ -266,6 +266,6 @@ a single IP takes 5-15 minutes depending on the network. Use
 interrupted run without restarting from port 1.
 
 **Stuck progress bar (one seed, `--resume`).** Verify with
-`sqlite3 ~/.local/share/swoomps/swoomps.db "SELECT * FROM scan_progress;"`.
+`sqlite3 ~/.local/share/doorsniff/doorsniff.db "SELECT * FROM scan_progress;"`.
 A row means that seed is fully done; an empty set means the first
 `--resume` call hasn't completed a seed yet.

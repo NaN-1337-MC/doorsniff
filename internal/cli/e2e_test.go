@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/renanbray/swoomps/internal/model"
-	"github.com/renanbray/swoomps/internal/protocol/slp"
-	"github.com/renanbray/swoomps/internal/protocol/slp/slptest"
-	"github.com/renanbray/swoomps/internal/scanner"
-	"github.com/renanbray/swoomps/internal/storage"
+	"github.com/renanbray/doorsniff/internal/model"
+	"github.com/renanbray/doorsniff/internal/protocol/slp"
+	"github.com/renanbray/doorsniff/internal/protocol/slp/slptest"
+	"github.com/renanbray/doorsniff/internal/scanner"
+	"github.com/renanbray/doorsniff/internal/storage"
 )
 
 func TestE2E_ParseProbeFlags(t *testing.T) {

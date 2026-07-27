@@ -13,9 +13,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
-	"github.com/renanbray/swoomps/internal/config"
-	"github.com/renanbray/swoomps/internal/model"
-	"github.com/renanbray/swoomps/internal/storage"
+	"github.com/renanbray/doorsniff/internal/config"
+	"github.com/renanbray/doorsniff/internal/model"
+	"github.com/renanbray/doorsniff/internal/storage"
 )
 
 var tableHeaders = []string{"#", "ADDRESS", "VERSION", "LOGIN", "PLAYERS", "LATENCY", "LAST SEEN", "MOTD", "MAP"}
@@ -23,6 +23,11 @@ var tableHeaders = []string{"#", "ADDRESS", "VERSION", "LOGIN", "PLAYERS", "LATE
 var tableWidths = []int{5, 22, 20, 10, 10, 9, 20, 36, 16}
 
 func runList(args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -40,14 +45,14 @@ func runList(args []string) error {
 	)
 
 	fs.StringVar(&versionFlag, "version", "", "filter by version (e.g. 1.21.1 or 1.21.1,26.1.2)")
-	fs.StringVar(&engineFlag, "engine", "", "filter by server engine (e.g. paper, purpur)")
+	fs.StringVar(&engineFlag, "engine", "", "filter by engine, case-insensitive (e.g. paper, purpur)")
 	fs.StringVar(&playersFlag, "players", "", "filter by player count (e.g. >1, 1-10, <50)")
 	fs.StringVar(&maxPlayersFlag, "maxplayers", "", "filter by max players (e.g. >=100, 50-200)")
-	fs.StringVar(&portFlag, "port", "", "filter by port (e.g. 25565 or 25500-25600)")
+	fs.StringVar(&portFlag, "port", "", "filter by port or range (e.g. 25565 or 25500-25600)")
 	fs.StringVar(&motdFlag, "motd", "", "search MOTD for keywords")
 	fs.StringVar(&loginModeFlag, "login", "", "filter by login mode (cracked, premium, whitelist, banned, kicked, full)")
-	fs.StringVar(&sortFlag, "sort", "recent", "sort by: players, latency, version, port, recent, oldest, login")
-	fs.IntVar(&limitFlag, "limit", 50, "max results to show")
+	fs.StringVar(&sortFlag, "sort", cfg.ListSort, "sort by: players, latency, version, port, recent, oldest, login")
+	fs.IntVar(&limitFlag, "limit", cfg.ListLimit, "max results to show (0 = no limit)")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
 
 	if err := fs.Parse(args); err != nil {
@@ -81,11 +86,6 @@ func runList(args []string) error {
 	}
 
 	versions := ParseVersionList(versionFlag)
-
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
 
 	dbPath := cfg.DatabasePath
 	if databaseFlag != "" {
@@ -253,8 +253,8 @@ func latencyColor(ms int64) lipgloss.Color {
 
 func listUsage() string {
 	var b strings.Builder
-	b.WriteString("swoomps list — query and display found servers\n\n")
-	b.WriteString("Usage:\n  swoomps list [flags]\n\n")
+	b.WriteString("doorsniff list — query and display found servers\n\n")
+	b.WriteString("Usage:\n  doorsniff list [flags]\n\n")
 	b.WriteString("Flags:\n")
 	b.WriteString("  --version VER   filter by version, comma-separated (e.g. 1.21.1,26.1.2)\n")
 	b.WriteString("  --engine ENG    filter by engine, case-insensitive (e.g. paper, purpur)\n")
@@ -264,14 +264,14 @@ func listUsage() string {
 	b.WriteString("  --motd TEXT     search MOTD for keywords\n")
 	b.WriteString("  --login MODE   filter by login mode (cracked, premium, whitelist, banned, kicked, full)\n")
 	b.WriteString("  --sort KEY      sort by: players, latency, version, port, recent, oldest, login\n")
-	b.WriteString("  --limit N       max results (default 50)\n")
+	b.WriteString("  --limit N       max results (0 = no limit)\n")
 	b.WriteString("  --database PATH override database path\n")
 	b.WriteString("\nPlayer filter operators: =, >, <, >=, <=, - (range)\n")
 	b.WriteString("Examples:\n")
-	b.WriteString("  swoomps list\n")
-	b.WriteString("  swoomps list --version=1.21.1 --engine=paper --players='>1'\n")
-	b.WriteString("  swoomps list --players='1-10' --sort=players\n")
-	b.WriteString("  swoomps list --login=cracked\n")
-	b.WriteString("  swoomps list --sort=login\n")
+	b.WriteString("  doorsniff list\n")
+	b.WriteString("  doorsniff list --version=1.21.1 --engine=paper --players='>1'\n")
+	b.WriteString("  doorsniff list --players='1-10' --sort=players\n")
+	b.WriteString("  doorsniff list --login=cracked\n")
+	b.WriteString("  doorsniff list --sort=login\n")
 	return b.String()
 }

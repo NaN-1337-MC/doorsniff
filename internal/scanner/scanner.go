@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/renanbray/swoomps/internal/model"
-	"github.com/renanbray/swoomps/internal/storage"
+	"github.com/renanbray/doorsniff/internal/model"
+	"github.com/renanbray/doorsniff/internal/storage"
 )
 
 // Options configures a full scan. Seeds must be resolved by the

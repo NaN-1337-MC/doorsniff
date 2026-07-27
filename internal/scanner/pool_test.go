@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/renanbray/swoomps/internal/model"
+	"github.com/renanbray/doorsniff/internal/model"
 )
 
 // TestRunProcessesEachTargetOnce verifies that every target yielded

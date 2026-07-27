@@ -16,7 +16,7 @@ import (
 	"testing"
 	"unicode/utf16"
 
-	"github.com/renanbray/swoomps/internal/protocol/slp"
+	"github.com/renanbray/doorsniff/internal/protocol/slp"
 )
 
 // Config holds the creation parameters for a FakeServer.

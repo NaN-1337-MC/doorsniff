@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/renanbray/swoomps/internal/model"
+	"github.com/renanbray/doorsniff/internal/model"
 )
 
 // ListOptions constrains and orders ListServers queries.

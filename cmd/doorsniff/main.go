@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/renanbray/swoomps/internal/cli"
+	"github.com/renanbray/doorsniff/internal/cli"
 )
 
 func main() {

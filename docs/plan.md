@@ -2,7 +2,7 @@
 
 ## Vision
 
-`swoomps` is a Minecraft server scanner written in Go. Given a list of
+`doorsniff` is a Minecraft server scanner written in Go. Given a list of
 seed IPs (or CIDR ranges), it scans a configurable port range, checks
 each open port for a Minecraft server (SLP, with a legacy 1.6 fallback
 for BungeeCord-style proxies), persists the results to a local SQLite
@@ -36,7 +36,7 @@ In scope (current):
 
 In scope (planned):
 
-- TUI dashboard behind `swoomps tui` (Bubbletea).
+- TUI dashboard behind `doorsniff tui` (Bubbletea).
 - Query protocol (UDP) — basic and full stat, with plugin list.
 - Offline-mode detection: after SLP finds a server, attempt a Login
   handshake to determine online-mode (premium) vs offline-mode (cracked).
@@ -66,7 +66,7 @@ Out of scope:
 | 7 | CLI subcommands | done | `probe`, `list`, `init`, `seed`; `scan` and `tui` are stubs |
 | 8 | Storage | done | upsert with port + probe_kind; `list` with 7 filters |
 | 9 | Polish | done | sticky progress bar, per-IP bar, `--resume`, ASCII mode, seeds.txt population |
-| 10 | TUI dashboard | pending | Bubbletea dashboard behind `swoomps tui` |
+| 10 | TUI dashboard | pending | Bubbletea dashboard behind `doorsniff tui` |
 | 11 | Offline-mode detection | done | Login handshake to detect cracked/premium/whitelisted servers |
 
 ## Current focus
@@ -95,5 +95,5 @@ architecture doc.
 
 ## Versioning
 
-There is no version yet. The binary prints `swoomps dev (no version yet)`
-on `swoomps version`. Tags will start once the TUI lands.
+There is no version yet. The binary prints `doorsniff dev (no version yet)`
+on `doorsniff version`. Tags will start once the TUI lands.

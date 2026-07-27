@@ -1,11 +1,11 @@
 # Project State
 
-> Snapshot of the swoomps project as of the last session. Read this
+> Snapshot of the doorsniff project as of the last session. Read this
 > first if you're picking up where a previous session left off.
 
 ## What this is
 
-**swoomps** is a Minecraft server scanner written in Go. Given a list
+**doorsniff** is a Minecraft server scanner written in Go. Given a list
 of seed IPs, it scans a configurable port range, checks each open
 port for a Minecraft server (SLP + legacy SLP fallback), and persists
 results to a local SQLite database.
@@ -34,8 +34,8 @@ in ports 6900-33310). The other 4 IPs are still being scanned.
 
 ## What is not done yet
 
-- `swoomps tui` is a stub ("not implemented yet") — phase 9
-- `swoomps scan`, `list`, `seed`, `init` are stubs — same dispatcher
+- `doorsniff tui` is a stub ("not implemented yet") — phase 9
+- `doorsniff scan`, `list`, `seed`, `init` are stubs — same dispatcher
 - No `--list` query interface yet (DB has the data; no CLI to read it)
 - No Query protocol (UDP) — phase 3 was skipped
 - No CIDR expansion of seed IPs (only direct seeds)
@@ -49,7 +49,7 @@ in ports 6900-33310). The other 4 IPs are still being scanned.
 
 ```
                 ┌───────────────┐
-                │  seed loader  │   reads ~/.config/swoomps/seeds/*.txt
+                │  seed loader  │   reads ~/.config/doorsniff/seeds/*.txt
                 └───────┬───────┘
                         ▼
    ┌────────────────────────────────────┐
@@ -78,12 +78,12 @@ in ports 6900-33310). The other 4 IPs are still being scanned.
 ## File structure
 
 ```
-swoomps/
-├── cmd/swoomps/main.go              # entry point → cli.Run
+doorsniff/
+├── cmd/doorsniff/main.go              # entry point → cli.Run
 ├── internal/
 │   ├── cli/                          # flag parsing + dispatch
 │   │   ├── dispatch.go               # top-level command router
-│   │   ├── probe.go                  # `swoomps probe` handler (REAL)
+│   │   ├── probe.go                  # `doorsniff probe` handler (REAL)
 │   │   ├── scan.go                   # stub: "not implemented yet"
 │   │   ├── tui.go                    # stub
 │   │   ├── list.go                   # stub
@@ -142,59 +142,59 @@ swoomps/
 
 ```bash
 make build
-# → bin/swoomps
+# → bin/doorsniff
 ```
 
 ### First run
 
 ```bash
-mkdir -p ~/.config/swoomps/seeds
-echo "mc.hypixel.net" > ~/.config/swoomps/seeds/minecraft.txt
-./bin/swoomps probe --ports 25565 --qps 50 --workers 50 --timeout 3s
+mkdir -p ~/.config/doorsniff/seeds
+echo "mc.hypixel.net" > ~/.config/doorsniff/seeds/minecraft.txt
+./bin/doorsniff probe --ports 25565 --qps 50 --workers 50 --timeout 3s
 ```
 
 ### Common commands
 
 ```bash
 # Smoke test (just port 25565)
-./bin/swoomps probe --ports 25565 --qps 50
+./bin/doorsniff probe --ports 25565 --qps 50
 
 # Minecraft port range
-./bin/swoomps probe --ports 25500-25600 --qps 200 --workers 200 --timeout 1s
+./bin/doorsniff probe --ports 25500-25600 --qps 200 --workers 200 --timeout 1s
 
 # Full 1-65535 (slow on filtered IPs)
-./bin/swoomps probe --ports 1-65535 --qps 300 --workers 300 --timeout 1s
+./bin/doorsniff probe --ports 1-65535 --qps 300 --workers 300 --timeout 1s
 
 # Show all per-target error lines (verbose)
-./bin/swoomps probe --ports 1-65535 -v
+./bin/doorsniff probe --ports 1-65535 -v
 
 # Short flag alias
-./bin/swoomps probe --ports 1-65535 -v
+./bin/doorsniff probe --ports 1-65535 -v
 ```
 
 ### Query the database
 
 ```bash
 # All servers, most recent first
-sqlite3 -header -column ~/.local/share/swoomps/swoomps.db \
+sqlite3 -header -column ~/.local/share/doorsniff/doorsniff.db \
   "SELECT ip, port, version_name, num_players, max_players, last_seen
    FROM servers ORDER BY last_seen DESC;"
 
 # Top by players
-sqlite3 -header -column ~/.local/share/swoomps/swoomps.db \
+sqlite3 -header -column ~/.local/share/doorsniff/doorsniff.db \
   "SELECT ip, port, version_name, num_players
    FROM servers ORDER BY num_players DESC LIMIT 20;"
 
 # Export to CSV
-sqlite3 -header -csv ~/.local/share/swoomps/swoomps.db \
+sqlite3 -header -csv ~/.local/share/doorsniff/doorsniff.db \
   "SELECT * FROM servers;" > servers.csv
 ```
 
 ## Configuration
 
-- **Config file**: `~/.config/swoomps/config.yaml` (optional, auto-created on demand)
-- **Seeds dir**: `~/.config/swoomps/seeds/` (every `.txt` file is parsed)
-- **Database**: `~/.local/share/swoomps/swoomps.db` (WAL mode, pure-Go driver)
+- **Config file**: `~/.config/doorsniff/config.yaml` (optional, auto-created on demand)
+- **Seeds dir**: `~/.config/doorsniff/seeds/` (every `.txt` file is parsed)
+- **Database**: `~/.local/share/doorsniff/doorsniff.db` (WAL mode, pure-Go driver)
 
 Defaults (from `config.Load`):
 - `qps = 50`
@@ -265,7 +265,7 @@ shaped the code:
    replaces hand-rolled pools.
 7. **`UNIQUE(ip, port)`** on the servers table — each (ip, port) is one
    row; conflict updates `last_seen` and metadata.
-8. **Flag-based CLI**: `swoomps probe [flags]` etc. Subcommand stubs
+8. **Flag-based CLI**: `doorsniff probe [flags]` etc. Subcommand stubs
    (`scan`, `tui`, `list`, `seed`, `init`) remain in the dispatcher
    but are not implemented yet.
 
@@ -326,17 +326,17 @@ now focus on perfecting what we have). Candidates:
 make build
 
 # run scan (default flags: --ports 1-65535 --qps 50 --workers 64)
-./bin/swoomps probe
+./bin/doorsniff probe
 
 # run scan (faster, narrower)
-./bin/swoomps probe --ports 25500-25600 --qps 200 --workers 200 --timeout 1s
+./bin/doorsniff probe --ports 25500-25600 --qps 200 --workers 200 --timeout 1s
 
 # run scan (show all per-target lines)
-./bin/swoomps probe -v
+./bin/doorsniff probe -v
 
 # stop
 Ctrl-C
 
 # query DB
-sqlite3 ~/.local/share/swoomps/swoomps.db "SELECT * FROM servers;"
+sqlite3 ~/.local/share/doorsniff/doorsniff.db "SELECT * FROM servers;"
 ```

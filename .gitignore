@@ -7,8 +7,8 @@
 # Local config / data (XDG paths are used by default, but keep these too)
 /config.yaml
 /data/
-/swoomps.db
-/swoomps.db-*
+/doorsniff.db
+/doorsniff.db-*
 
 # Editor / OS
 .idea/

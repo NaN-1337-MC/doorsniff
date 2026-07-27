@@ -15,11 +15,11 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
-	"github.com/renanbray/swoomps/internal/model"
-	"github.com/renanbray/swoomps/internal/protocol/login"
-	"github.com/renanbray/swoomps/internal/protocol/query"
-	"github.com/renanbray/swoomps/internal/protocol/slp"
-	"github.com/renanbray/swoomps/internal/storage"
+	"github.com/renanbray/doorsniff/internal/model"
+	"github.com/renanbray/doorsniff/internal/protocol/login"
+	"github.com/renanbray/doorsniff/internal/protocol/query"
+	"github.com/renanbray/doorsniff/internal/protocol/slp"
+	"github.com/renanbray/doorsniff/internal/storage"
 )
 
 // Stats summarises a scan run. Probed counts every target examined;

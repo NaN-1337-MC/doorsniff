@@ -1,10 +1,10 @@
-# swoomps
+# doorsniff
 # Minecraft server scanner written in Go.
 
 .PHONY: all build run test tidy clean help scan tui list init
 
-BINARY := swoomps
-CMD_DIR := ./cmd/swoomps
+BINARY := doorsniff
+CMD_DIR := ./cmd/doorsniff
 PKG := ./...
 
 all: build

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/renanbray/swoomps/internal/model"
+	"github.com/renanbray/doorsniff/internal/model"
 )
 
 // LoadSeedFile parses a single seed file and returns the seeds it

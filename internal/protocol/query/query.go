@@ -5,7 +5,7 @@
 // list. It must be explicitly enabled on the server (enable-query=true
 // in server.properties).
 //
-// The protocol has two stat modes (basic and full). swoomps always
+// The protocol has two stat modes (basic and full). doorsniff always
 // uses full stat because it includes the plugin list and player names.
 package query
 

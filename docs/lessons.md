@@ -157,7 +157,7 @@ fragments of the old line visible. The unit test for this is
 "visually scan a minute of output" — there is no test that would
 catch a forgotten `ClearLine`.
 
-## 9. `lipgloss/table` is the right tool for `swoomps list`
+## 9. `lipgloss/table` is the right tool for `doorsniff list`
 
 **Lesson.** A previous version of the list view rendered each
 cell with manual width accounting. It was 80 lines of brittle
@@ -213,7 +213,7 @@ that exposes design issues, then UX.
 the test suite**. The test in `pool_test.go` calls `Run` directly
 with a hand-built target channel; it never runs `generateTargets`,
 so the per-IP progress state was never tested. It was a manual
-`./swoomps probe --file ./seed.txt` run that surfaced the bug.
+`./doorsniff probe --file ./seed.txt` run that surfaced the bug.
 
 **Lesson.** The most dangerous bugs live at the boundaries between
 components the test suite covers. The fix is integration tests

@@ -4,9 +4,9 @@ A network scanner is a sensitive tool. This document records the
 boundaries the project observes, the user responsibilities, and the
 legal background.
 
-## What swoomps does
+## What doorsniff does
 
-`swoomps` reads a user-supplied list of seed IPs and scans a
+`doorsniff` reads a user-supplied list of seed IPs and scans a
 configurable port range against each one. For every port that
 responds with a TCP handshake, it attempts the Minecraft Server List
 Ping (modern 1.7+ handshake, with a 1.6 fallback for BungeeCord-style
@@ -18,7 +18,7 @@ Minecraft client performs when displaying the multiplayer server
 list. They are not exploitation, fuzzing, or denial-of-service
 traffic.
 
-## What swoomps does not do
+## What doorsniff does not do
 
 - It does not send RCON commands.
 - It does not authenticate, brute-force, or try credentials.
@@ -51,7 +51,7 @@ The scan is bounded in three ways:
 
 ## The user's responsibilities
 
-By running `swoomps probe`, the user agrees to:
+By running `doorsniff probe`, the user agrees to:
 
 1. **Respect local law.** Computer-misuse statutes vary by
    jurisdiction. Some countries treat unsolicited network probing
@@ -96,7 +96,7 @@ legal exposure comes from:
 - Bypassing authentication or access controls.
 - Accessing systems the user is not authorised to access.
 
-`swoomps` does none of these. The Minecraft protocols it speaks
+`doorsniff` does none of these. The Minecraft protocols it speaks
 are publicly documented and intended to be queried by any client.
 The project's posture is that this is closer to `dig` than to a
 port scanner, but the user should still satisfy themselves that
@@ -109,10 +109,10 @@ behaviour, the contact is the repository's issue tracker.
 
 ## Future
 
-- A `blacklist.txt` at `$XDG_CONFIG_HOME/swoomps/blacklist.txt`
+- A `blacklist.txt` at `$XDG_CONFIG_HOME/doorsniff/blacklist.txt`
   that drops any target whose IP is in the file before probing.
   Not yet implemented.
-- A DNS TXT record at `_swoomps.<server-hostname>` for opt-out.
+- A DNS TXT record at `_doorsniff.<server-hostname>` for opt-out.
   Not yet implemented.
 - A GeoIP enrichment so the user can see which hosting regions
   their scan is touching. Not yet implemented.

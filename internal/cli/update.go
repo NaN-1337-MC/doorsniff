@@ -18,18 +18,23 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
-	"github.com/renanbray/swoomps/internal/config"
-	"github.com/renanbray/swoomps/internal/model"
-	"github.com/renanbray/swoomps/internal/protocol/login"
-	"github.com/renanbray/swoomps/internal/protocol/query"
-	"github.com/renanbray/swoomps/internal/protocol/slp"
-	"github.com/renanbray/swoomps/internal/scanner"
-	"github.com/renanbray/swoomps/internal/storage"
+	"github.com/renanbray/doorsniff/internal/config"
+	"github.com/renanbray/doorsniff/internal/model"
+	"github.com/renanbray/doorsniff/internal/protocol/login"
+	"github.com/renanbray/doorsniff/internal/protocol/query"
+	"github.com/renanbray/doorsniff/internal/protocol/slp"
+	"github.com/renanbray/doorsniff/internal/scanner"
+	"github.com/renanbray/doorsniff/internal/storage"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
 
 func runUpdate(args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -52,20 +57,20 @@ func runUpdate(args []string) error {
 	)
 
 	fs.StringVar(&versionFlag, "version", "", "filter by version (e.g. 1.21.1)")
-	fs.StringVar(&engineFlag, "engine", "", "filter by server engine (e.g. paper, purpur)")
+	fs.StringVar(&engineFlag, "engine", "", "filter by server engine, case-insensitive (e.g. paper, purpur)")
 	fs.StringVar(&playersFlag, "players", "", "filter by player count (e.g. >1, 1-10, <50)")
 	fs.StringVar(&maxPlayersFlag, "maxplayers", "", "filter by max players (e.g. >=100, 50-200)")
-	fs.StringVar(&portFlag, "port", "", "filter by port (e.g. 25565 or 25500-25600)")
+	fs.StringVar(&portFlag, "port", "", "filter by port or range (e.g. 25565 or 25500-25600)")
 	fs.StringVar(&motdFlag, "motd", "", "search MOTD for keywords")
-	fs.IntVar(&qpsFlag, "qps", 200, "global QPS limit")
-	fs.IntVar(&workersFlag, "workers", 64, "worker pool size")
-	fs.DurationVar(&timeoutFlag, "timeout", 3*time.Second, "per-probe timeout")
-	fs.IntVar(&limitFlag, "limit", 0, "max servers to update (0 = all)")
+	fs.IntVar(&qpsFlag, "qps", cfg.UpdateQPS, "global QPS limit")
+	fs.IntVar(&workersFlag, "workers", cfg.UpdateWorkers, "worker pool size")
+	fs.DurationVar(&timeoutFlag, "timeout", cfg.UpdateTimeout, "per-probe timeout")
+	fs.IntVar(&limitFlag, "limit", cfg.UpdateLimit, "max servers to update (0 = all)")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
 	fs.BoolVar(&loginFlag, "login", false, "perform login handshake to detect online/offline mode")
-	fs.StringVar(&loginUserFlag, "login-user", "Herobrine", "username for login handshake")
-	fs.BoolVar(&debugLoginFlag, "debug-login", false, "dump raw login packet bytes + disconnect reasons to stderr (debug)")
-	fs.BoolVar(&asciiFlag, "ascii", false, "plain output (no colour, ASCII border and bar)")
+	fs.StringVar(&loginUserFlag, "login-user", cfg.LoginUser, "username for login handshake")
+	fs.BoolVar(&debugLoginFlag, "debug-login", cfg.DebugLogin, "dump raw login packet bytes + disconnect reasons to stderr (debug)")
+	fs.BoolVar(&asciiFlag, "ascii", cfg.ASCII, "plain output (no colour, ASCII border and bar)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -98,11 +103,6 @@ func runUpdate(args []string) error {
 	}
 
 	versions := ParseVersionList(versionFlag)
-
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
 
 	dbPath := cfg.DatabasePath
 	if databaseFlag != "" {
@@ -753,8 +753,8 @@ func isConnReset(err error) bool {
 
 func updateUsage() string {
 	var b strings.Builder
-	b.WriteString("swoomps update — re-probe known servers to refresh their data\n\n")
-	b.WriteString("Usage:\n  swoomps update [flags]\n\n")
+	b.WriteString("doorsniff update — re-probe known servers to refresh their data\n\n")
+	b.WriteString("Usage:\n  doorsniff update [flags]\n\n")
 	b.WriteString("Flags:\n")
 	b.WriteString("  --version VER    filter by version (e.g. 1.21.1,26.1.2)\n")
 	b.WriteString("  --engine ENG     filter by server engine, case-insensitive (e.g. paper, purpur)\n")
@@ -762,20 +762,20 @@ func updateUsage() string {
 	b.WriteString("  --maxplayers EXPR filter by max players (e.g. >=100, 50-200)\n")
 	b.WriteString("  --port PORT      filter by port or range (e.g. 25565 or 25500-25600)\n")
 	b.WriteString("  --motd TEXT      search MOTD for keywords\n")
-	b.WriteString("  --qps N          QPS limit (default 200)\n")
-	b.WriteString("  --workers N       worker pool size (default 64)\n")
-	b.WriteString("  --timeout DUR    per-probe timeout (default 3s)\n")
-	b.WriteString("  --limit N        max servers to update (0 = all)\n")
+	b.WriteString(fmt.Sprintf("  --qps N          QPS limit (default %d)\n", config.DefaultUpdateQPS))
+	b.WriteString(fmt.Sprintf("  --workers N       worker pool size (default %d)\n", config.DefaultUpdateWorkers))
+	b.WriteString(fmt.Sprintf("  --timeout DUR    per-probe timeout (default %s)\n", config.DefaultUpdateTimeout))
+	b.WriteString(fmt.Sprintf("  --limit N        max servers to update (default %d, 0 = all)\n", config.DefaultUpdateLimit))
 	b.WriteString("  --database PATH  override database path\n")
 	b.WriteString("  --login          perform login handshake to detect online/offline mode\n")
-	b.WriteString("  --login-user STR username for login handshake (default Herobrine)\n")
+	b.WriteString(fmt.Sprintf("  --login-user STR username for login handshake (default %s)\n", config.DefaultLoginUser))
 	b.WriteString("  --debug-login    dump raw login packet bytes + disconnect reasons to stderr\n")
 	b.WriteString("  --ascii          plain output (no colour, ASCII border and bar)\n")
 	b.WriteString("\nServers are updated oldest-first (by last_seen).\n")
 	b.WriteString("\nExamples:\n")
-	b.WriteString("  swoomps update\n")
-	b.WriteString("  swoomps update --version=1.21.1 --engine=paper\n")
-	b.WriteString("  swoomps update --players='>0' --maxplayers='>=50'\n")
-	b.WriteString("  swoomps update --login\n")
+	b.WriteString("  doorsniff update\n")
+	b.WriteString("  doorsniff update --version=1.21.1 --engine=paper\n")
+	b.WriteString("  doorsniff update --players='>0' --maxplayers='>=50'\n")
+	b.WriteString("  doorsniff update --login\n")
 	return b.String()
 }

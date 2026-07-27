@@ -8,12 +8,12 @@ pure-Go, no CGO toolchain required.
 
 XDG-compliant:
 
-- Config: `~/.config/swoomps/config.yaml`
-- Seeds: `~/.config/swoomps/seeds/`
-- Database: `~/.local/share/swoomps/swoomps.db`
+- Config: `~/.config/doorsniff/config.yaml`
+- Seeds: `~/.config/doorsniff/seeds/`
+- Database: `~/.local/share/doorsniff/doorsniff.db`
 
 Override via env (`SWOOMPS_DATABASE_PATH`, `SWOOMPS_SEEDS_DIR`) or the
-binary's `--database` / `--seeds` flags. `swoomps probe --file PATH`
+binary's `--database` / `--seeds` flags. `doorsniff probe --file PATH`
 reads a single seed file instead of the seeds directory.
 
 ## Schema
@@ -167,7 +167,7 @@ ON CONFLICT (ip, port) DO UPDATE SET
   ...;
 ```
 
-`ListServersFiltered` is what `swoomps list` calls. It takes a
+`ListServersFiltered` is what `doorsniff list` calls. It takes a
 `ListQuery` with optional player count SQL, version substrings, engine
 substring, MOTD substring, and a port range. Filters are AND'd; the
 version / engine / MOTD lists are OR'd within their group.
@@ -194,7 +194,7 @@ keeps lock contention at zero. The `SaveProgress` calls from
 the SQLite call itself is sub-millisecond and happens between
 `out <-` operations on the target channel).
 
-## Query patterns (`swoomps list`)
+## Query patterns (`doorsniff list`)
 
 The CLI ships seven filters on top of the table:
 
@@ -241,5 +241,5 @@ not needed.
 - A `seeds` table would persist the seed list (today the seeds
   directory holds plain text files).
 - A `secrets` table for tokens, if a future feature needs auth.
-- A `--format json` flag on `swoomps list` would feed downstream
+- A `--format json` flag on `doorsniff list` would feed downstream
   pipelines without changing the schema.

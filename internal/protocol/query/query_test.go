@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/renanbray/swoomps/internal/protocol/query"
-	"github.com/renanbray/swoomps/internal/protocol/query/querytest"
+	"github.com/renanbray/doorsniff/internal/protocol/query"
+	"github.com/renanbray/doorsniff/internal/protocol/query/querytest"
 )
 
 func TestQuery_FullStat(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/renanbray/swoomps/internal/protocol/slp"
+	"github.com/renanbray/doorsniff/internal/protocol/slp"
 )
 
 func TestFakeServer_Modern(t *testing.T) {

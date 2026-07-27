@@ -1,4 +1,4 @@
-# swoomps — documentation
+# doorsniff — documentation
 
 This directory holds long-form documentation for the project. The
 README at the repository root is the entry point; the files here go
@@ -9,12 +9,12 @@ deeper.
 The current CLI is subcommand-based:
 
 ```
-swoomps probe                  # run a scan
-swoomps list                   # query the database
-swoomps update                 # re-probe known servers
-swoomps init                   # initialize config and database
-swoomps version                # print version
-swoomps help <sub>             # subcommand help
+doorsniff probe                  # run a scan
+doorsniff list                   # query the database
+doorsniff update                 # re-probe known servers
+doorsniff init                   # initialize config and database
+doorsniff version                # print version
+doorsniff help <sub>             # subcommand help
 ```
 
 `tui` and `seed` are reserved subcommands. They print "em breve" for
@@ -52,7 +52,7 @@ package.
 The docs were last revised to reflect:
 
 - The switch from a flag-based CLI (`--scan --seeds ...`) to
-  subcommands (`swoomps probe`).
+  subcommands (`doorsniff probe`).
 - The new `--file` flag and `--resume` support.
 - The two-line progress bar (per-IP + overall) and the legacy SLP
   fallback for BungeeCord-style proxies.

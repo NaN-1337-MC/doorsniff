@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/renanbray/swoomps/internal/model"
+	"github.com/renanbray/doorsniff/internal/model"
 )
 
 // newTestDB opens an in-memory SQLite, applies the schema, and returns

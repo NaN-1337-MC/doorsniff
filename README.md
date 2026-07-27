@@ -1,8 +1,8 @@
-# swoomps
+# doorsniff
 
 > Minecraft server scanner written in Go.
 
-`swoomps` reads a list of seed IPs (or CIDR ranges), scans a
+`doorsniff` reads a list of seed IPs (or CIDR ranges), scans a
 configurable port range, checks each open port for a Minecraft
 server (modern Server List Ping, with a 1.6 fallback for
 BungeeCord-style proxies), persists the results to a local SQLite
@@ -17,8 +17,8 @@ all work. See [docs/plan.md](docs/plan.md) for the roadmap.
 
 ## Features
 
-- Subcommand CLI: `swoomps probe`, `swoomps list`, `swoomps update`,
-  `swoomps init`
+- Subcommand CLI: `doorsniff probe`, `doorsniff list`, `doorsniff update`,
+  `doorsniff init`
 - Configurable port range (default `1-65535`)
 - TCP connect probe with rate limit (default 200 QPS, 256 workers)
 - Server List Ping (modern 1.7+) with JSON response
@@ -31,7 +31,7 @@ all work. See [docs/plan.md](docs/plan.md) for the roadmap.
 - Two-line sticky progress bar: per-IP + overall
 - Resume support: `--resume` skips seeds that were fully scanned
   in a previous run
-- Nine filters on `swoomps list` (version, engine, players, maxplayers,
+- Nine filters on `doorsniff list` (version, engine, players, maxplayers,
   port, MOTD, login mode, sort, limit)
 - ASCII mode for plain terminals (`--ascii`)
 - XDG-compliant config and database paths
@@ -40,14 +40,14 @@ all work. See [docs/plan.md](docs/plan.md) for the roadmap.
 ## Quick start
 
 ```bash
-go build -o swoomps ./cmd/swoomps
-./swoomps probe --file ./seed.txt
-./swoomps list
+go build -o doorsniff ./cmd/doorsniff
+./doorsniff probe --file ./seed.txt
+./doorsniff list
 ```
 
 A fuller walkthrough lives in [docs/quickstart.md](docs/quickstart.md).
 
-## `swoomps probe`
+## `doorsniff probe`
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -65,7 +65,7 @@ A fuller walkthrough lives in [docs/quickstart.md](docs/quickstart.md).
 `Ctrl+C` stops the scan. Use `--resume` to continue from the last
 checkpoint.
 
-## `swoomps list`
+## `doorsniff list`
 
 | Flag | Default | Purpose |
 |---|---|---|
@@ -80,7 +80,7 @@ checkpoint.
 | `--limit N` | `50` | Max results |
 | `--database PATH` | XDG default | Override database path |
 
-## `swoomps update`
+## `doorsniff update`
 
 Re-probes known servers to refresh their data. Supports the same
 filter flags as `list` to select which servers to update.
@@ -119,10 +119,10 @@ go mod tidy               # clean module graph
 
 ## Planned
 
-- TUI dashboard behind `swoomps tui` (Bubbletea)
+- TUI dashboard behind `doorsniff tui` (Bubbletea)
 - Query protocol (UDP) — basic and full stat
 - GeoIP enrichment of found servers
-- JSON / CSV export from `swoomps list`
+- JSON / CSV export from `doorsniff list`
 - Per-host blacklist file
 
 ## License

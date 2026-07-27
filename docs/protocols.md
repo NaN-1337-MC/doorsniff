@@ -165,7 +165,7 @@ never tried for ports where the modern handshake completed.
 
 Query is a UDP-based protocol introduced in Beta 1.9 that returns
 richer server information than SLP. It must be enabled on the server.
-swoomps always uses **full stat** mode because it includes the plugin
+doorsniff always uses **full stat** mode because it includes the plugin
 list and player names.
 
 ### Handshake (Type 0x09)

@@ -22,7 +22,7 @@ func Run(args []string) error {
 	case "init":
 		return runInit(rest)
 	case "version", "-v", "--version":
-		fmt.Println("swoomps dev (no version yet)")
+		fmt.Println("doorsniff dev (no version yet)")
 		return nil
 	case "help", "-h", "--help":
 		if len(rest) > 0 {
@@ -39,10 +39,21 @@ func Run(args []string) error {
 }
 
 func usage() {
-	fmt.Println(`swoomps — Minecraft server scanner
+// Gáttaþefur
+	fmt.Println(`
+                        ▓████████▓
+                       ▓░        █▓
+                      █  █████  █
+                     █  █     █ █
+                      ▓█ ▄   ▄ █
+                 ▄▄▄▄  █       █  ▄▄▄▄
+            ░░▒▓██  ██████   ██████  ██▓▒░░
+                 ▀██▀    █   █    ▀██▀
+                          ███
+         Doorsniif, a Minecraft server scanner.
 
 Usage:
-  swoomps <command> [flags]
+  doorsniff <command> [flags]
 
 Commands:
   probe               scan seeds from the configured directory or a file
@@ -51,7 +62,7 @@ Commands:
   init                initialize config and database
   version             print version
 
-Run 'swoomps help <command>' for more info on a command.`)
+Run 'doorsniff help <command>' for more info on a command.`)
 }
 
 func helpCmd(cmd string) error {
