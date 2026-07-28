@@ -12,6 +12,13 @@ This is a learning project: the goal is to get hands-on with Go's
 concurrency, the Minecraft wire protocols (SLP, legacy SLP, Login,
 Query), and the Charm TUI stack on a real codebase.
 
+> [!NOTE]
+> Este projeto foi escrito majoritariamente com o auxílio de IA
+> ("vibecode"). O código, os testes e boa parte da documentação foram
+> gerados e revisados em parceria com um modelo de linguagem. Use por
+> sua conta e risco; revise antes de confiar em qualquer parte para
+> uso em produção.
+
 ## Quick start
 
 ```bash
