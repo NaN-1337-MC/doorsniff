@@ -23,6 +23,18 @@ func (m LoginMode) String() string {
 	return string(m)
 }
 
+// IsPersistent reports whether this login mode describes the server's
+// authentication model (online/offline/whitelisted) rather than a
+// transient result of a single probe (disconnect/unknown/full/kicked/banned).
+// Persistent modes are written to login_mode; transient ones to last_login.
+func (m LoginMode) IsPersistent() bool {
+	switch m {
+	case LoginModeOnline, LoginModeOffline, LoginModeWhitelisted:
+		return true
+	}
+	return false
+}
+
 type LoginResult struct {
 	Mode             LoginMode
 	DisconnectReason string
@@ -57,7 +69,35 @@ var (
 	// Modded server requires Forge/FML on the client. Caught from the
 	// "This server has mods that require Forge/FML..." disconnect.
 	regexForge = regexp.MustCompile(`(?i)\b(forge|fml)\b|require.*forge|require.*fml`)
+
+	// Version hint extracted from disconnect messages. Catches:
+	//   "Please use version 1.21.11"
+	//   "Outdated client! Please use 1.21.11"
+	//   "Required version: 1.20.1"
+	//   "Use 1.21.11 to connect"
+	//   "multiplayer.disconnect.incompatible 1.21.11"
+	//   "Your client is outdated, please use 1.20.5"
+	// Captures vanilla (1.X.Y) and release-style (26.1.2) versions.
+	//
+	// The regex is intentionally permissive: any nearby "X.Y.Z" pattern
+	// that follows a version-use keyword is assumed to be the version
+	// hint. False positives (e.g. a banned message that happens to
+	// mention a version number) just trigger an extra retry that fails
+	// fast.
+	regexVersionHint = regexp.MustCompile(`(?i)(?:use|requires?|need|version|outdated|incompatible|too old|too new|to connect)[\s\w:,]*?(\d+\.\d+(?:\.\d+)?)`)
 )
+
+// ExtractVersionHint pulls a version string out of a disconnect reason
+// if the server reveals the version it wants. Returns "" when no hint
+// is present. The hint is informational only — callers must map the
+// version to a protocol number themselves.
+func ExtractVersionHint(reason string) string {
+	m := regexVersionHint.FindStringSubmatch(reason)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
 
 func DetectMode(reasonJSON string) LoginMode {
 	if reasonJSON == "" {

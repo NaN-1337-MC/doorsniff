@@ -43,7 +43,43 @@ var (
 // for, pass the protocol version reported by SLP — this avoids the
 // "outdated_client" disconnect that modern servers send when the
 // handshake protocol version doesn't match the server's expected range.
+//
+// If the first handshake fails with an outdated/incompatible message,
+// Handshake automatically retries with the version the server hints at
+// (extracted from the disconnect reason). The hint-based retry only
+// kicks in when the disconnect suggests a different protocol version
+// (e.g. "Please use version 1.21.11"); whitelist/ban/empty reasons do
+// not trigger a retry.
 func Handshake(ctx context.Context, host string, port uint16, timeout time.Duration, username string, protoVersion int32, logger *slog.Logger) (*LoginResult, error) {
+	result, err := doHandshakeOnce(ctx, host, port, timeout, username, protoVersion, logger)
+	if err != nil {
+		return nil, err
+	}
+	if result.Mode == LoginModeDisconnect || result.Mode == LoginModeUnknown {
+		if hint := ExtractVersionHint(result.DisconnectReason); hint != "" {
+			hintProto := ProtocolForVersion(hint)
+			if hintProto != protoVersion && hintProto != protocolVersionLegacy {
+				if logger != nil {
+					logger.Debug("login retry with hinted version",
+						"addr", net.JoinHostPort(host, strconv.Itoa(int(port))),
+						"hint", hint,
+						"old_proto", protoVersion,
+						"new_proto", hintProto,
+					)
+				}
+				if retried, err := doHandshakeOnce(ctx, host, port, timeout, username, hintProto, logger); err == nil {
+					result = retried
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+// doHandshakeOnce performs a single login handshake attempt without
+// retry logic. Used by Handshake to avoid duplicating the dial/send/
+// read code.
+func doHandshakeOnce(ctx context.Context, host string, port uint16, timeout time.Duration, username string, protoVersion int32, logger *slog.Logger) (*LoginResult, error) {
 	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
 
 	dialer := &net.Dialer{Timeout: timeout}
