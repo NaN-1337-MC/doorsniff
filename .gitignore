@@ -1,14 +1,29 @@
-# Binaries
+# Build artifacts
+/doorsniff
+/doorsniff.exe
 /bin/
 *.exe
 *.test
 *.out
 
-# Local config / data (XDG paths are used by default, but keep these too)
+# Local config / data (XDG paths used at runtime)
 /config.yaml
 /data/
 /doorsniff.db
 /doorsniff.db-*
+
+# Logs
+*.log
+
+# Personal seed/scan lists at the repo root
+# (bundled examples live in seeds/)
+/seed.txt
+/seed2.txt
+/seed3.txt
+/list.txt
+/playit.txt
+/big_scan_list.txt
+/good_seed.txt
 
 # Editor / OS
 .idea/
@@ -16,6 +31,15 @@
 .DS_Store
 *.swp
 *.swo
+*.swn
+*.swm
+*~
+Session.vim
+*.session
+.netrwhist
+.viminfo
+.tags
+.tags_sorted_by_file
 
 # Go workspace
 go.work
