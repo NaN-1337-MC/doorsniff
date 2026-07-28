@@ -39,22 +39,23 @@ func runUpdate(args []string) error {
 	fs.SetOutput(io.Discard)
 
 	var (
-		versionFlag      string
-		engineFlag       string
-		playersFlag      string
-		maxPlayersFlag   string
-		portFlag         string
-		motdFlag         string
-		qpsFlag          int
-		workersFlag      int
-		timeoutFlag      time.Duration
-		limitFlag        int
-		databaseFlag     string
-		loginFlag        bool
-		loginModeFlag    string
-		loginUserFlag    string
-		debugLoginFlag   bool
-		asciiFlag        bool
+		versionFlag        string
+		engineFlag         string
+		playersFlag        string
+		maxPlayersFlag     string
+		portFlag           string
+		motdFlag           string
+		qpsFlag            int
+		workersFlag        int
+		timeoutFlag        time.Duration
+		limitFlag          int
+		databaseFlag       string
+		loginFlag          bool
+		loginModeFlag      string
+		loginUserFlag      string
+		debugLoginFlag     bool
+		asciiFlag          bool
+		playerHistoryFlag  bool
 	)
 
 	fs.StringVar(&versionFlag, "version", "", "filter by version (e.g. 1.21.1)")
@@ -72,6 +73,7 @@ func runUpdate(args []string) error {
 	fs.StringVar(&loginModeFlag, "login-mode", cfg.UpdateLoginMode, "login handshake aggressiveness: off | detect | intrusive")
 	fs.StringVar(&loginUserFlag, "login-user", cfg.LoginUser, "username for login handshake")
 	fs.BoolVar(&debugLoginFlag, "debug-login", cfg.DebugLogin, "dump raw login packet bytes + disconnect reasons to stderr (debug)")
+	fs.BoolVar(&playerHistoryFlag, "playerhistory", cfg.UpdatePlayerHistory, "record player visit history")
 	fs.BoolVar(&asciiFlag, "ascii", cfg.ASCII, "plain output (no colour, ASCII border and bar)")
 
 	if err := fs.Parse(args); err != nil {
@@ -223,6 +225,17 @@ func runUpdate(args []string) error {
 			if err := repo.UpsertServer(gctx, s); err != nil {
 				ustats.checked.Add(1)
 				return nil
+			}
+
+			// Record player events if player history is enabled.
+			if playerHistoryFlag && len(s.SamplePlayers) > 0 {
+				now := time.Now().UTC()
+				for _, p := range s.SamplePlayers {
+					if p.Name == "" {
+						continue
+					}
+					_ = repo.RecordPlayerEvent(gctx, s.IP, s.Port, p, now)
+				}
 			}
 
 			ustats.checked.Add(1)
@@ -799,6 +812,7 @@ func updateUsage() string {
 	b.WriteString(fmt.Sprintf("  --login-user STR username for login handshake (default %s)\n", config.DefaultLoginUser))
 	b.WriteString("  --debug-login    dump raw login packet bytes + disconnect reasons to stderr\n")
 	b.WriteString("  --ascii          plain output (no colour, ASCII border and bar)\n")
+	b.WriteString(fmt.Sprintf("  --playerhistory  record player visit history (default %t)\n", config.DefaultUpdatePlayerHistory))
 	b.WriteString("\nServers are updated oldest-first (by last_seen).\n")
 	b.WriteString("\nExamples:\n")
 	b.WriteString("  doorsniff update\n")

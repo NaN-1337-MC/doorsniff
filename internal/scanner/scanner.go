@@ -25,15 +25,13 @@ type Options struct {
 	Verbose   bool
 	ASCII     bool
 	Resume    bool
-	// Login is the legacy bool toggle. When false it forces
-	// LoginMode = StealthOff regardless of what the caller set.
-	// Kept so existing configs work without changes.
 	Login     bool
-	// LoginMode controls how aggressive the login handshake is
-	// (off | detect | intrusive). Defaults to login.DefaultStealthMode
-	// (detect) when left at the zero value.
 	LoginMode login.StealthMode
 	LoginUser string
+	// PlayerHistory controls whether player visit events are recorded.
+	// When true, each scan that finds players inserts rows into the
+	// player_events table. Defaults to true.
+	PlayerHistory bool
 }
 
 // RunScan takes already-resolved seeds, generates targets across
@@ -77,19 +75,20 @@ func RunScan(ctx context.Context, opts Options) (*Stats, error) {
 	}
 
 	return Run(ctx, PoolConfig{
-		Workers:   opts.Workers,
-		QPS:       opts.QPS,
-		Timeout:   timeout,
-		Repo:      opts.Repo,
-		Verbose:   opts.Verbose,
-		ASCII:     opts.ASCII,
-		Total:     total,
-		PortsLo:   opts.PortsLo,
-		PortsHi:   opts.PortsHi,
-		State:     state,
-		Login:     loginMode != login.StealthOff,
-		LoginMode: loginMode,
-		LoginUser: opts.LoginUser,
+		Workers:       opts.Workers,
+		QPS:           opts.QPS,
+		Timeout:       timeout,
+		Repo:          opts.Repo,
+		Verbose:       opts.Verbose,
+		ASCII:         opts.ASCII,
+		Total:         total,
+		PortsLo:       opts.PortsLo,
+		PortsHi:       opts.PortsHi,
+		State:         state,
+		Login:         loginMode != login.StealthOff,
+		LoginMode:     loginMode,
+		LoginUser:     opts.LoginUser,
+		PlayerHistory: opts.PlayerHistory,
 	}, targets)
 }
 

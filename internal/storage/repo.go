@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -672,4 +673,32 @@ UPDATE servers SET login_mode = ? WHERE ip = ? AND port = ?;
 		return fmt.Errorf("updating login_mode for %s:%d: %w", ip, port, err)
 	}
 	return nil
+}
+
+// RecordPlayerEvent inserts a player event for a server scan.
+// Each call creates a new row — the table is append-only (event log).
+func (r *Repository) RecordPlayerEvent(ctx context.Context, ip string, port uint16, player model.SamplePlayer, seenAt time.Time) error {
+	const q = `
+	INSERT INTO player_events (server_ip, server_port, player_name, player_id, seen_at)
+	VALUES (?, ?, ?, ?, ?)
+	`
+	playerID := player.ID
+	if playerID == "" {
+		playerID = offlinePlayerUUID(player.Name)
+	}
+	if _, err := r.db.conn.ExecContext(ctx, q, ip, port, player.Name, playerID, seenAt); err != nil {
+		return fmt.Errorf("recording player event: %w", err)
+	}
+	return nil
+}
+
+// offlinePlayerUUID generates a deterministic offline-mode UUID
+// from a player name, matching the Minecraft client algorithm.
+// Returns a hyphenated UUID string: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+func offlinePlayerUUID(name string) string {
+	sum := md5.Sum([]byte("OfflinePlayer:" + name))
+	sum[6] = (sum[6] & 0x0f) | 0x30
+	sum[8] = (sum[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		sum[0:4], sum[4:6], sum[6:8], sum[8:10], sum[10:16])
 }

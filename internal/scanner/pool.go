@@ -52,12 +52,11 @@ type PoolConfig struct {
 	// Login, when true, performs a login handshake after successful
 	// SLP to determine online/offline mode.
 	Login   bool
-	// LoginMode controls how aggressive the handshake is. See
-	// login.StealthMode. Honours Login above: Login=false forces
-	// StealthOff. Defaults to login.DefaultStealthMode (detect).
 	LoginMode login.StealthMode
-	// LoginUser is the username sent in the Login Start packet.
 	LoginUser string
+	// PlayerHistory, when true, records each player seen in a scan
+	// into the player_events table for historical tracking.
+	PlayerHistory bool
 
 	// State is the shared progress state. It must be the same
 	// instance passed to generateTargets (or NewProgressState when
@@ -176,6 +175,8 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (*Sta
 			login:         cfg.Login,
 			loginMode:     cfg.LoginMode,
 			loginUser:     cfg.LoginUser,
+			playerHistory: cfg.PlayerHistory,
+			repo:          cfg.Repo,
 		}
 		g.Go(func() error {
 			return wk.run(gctx)
@@ -217,6 +218,8 @@ type worker struct {
 	login         bool
 	loginMode     login.StealthMode
 	loginUser     string
+	playerHistory bool
+	repo          *storage.Repository
 }
 
 // run reads targets until the channel is closed or the context is
@@ -362,6 +365,10 @@ func (wk *worker) processTarget(ctx context.Context, t model.Target) {
 	wk.stats.Found.Add(1)
 	wk.printFound(s)
 
+	// Record player events for SLP sample players before Query
+	// enrichment can overwrite SamplePlayers.
+	wk.recordPlayerEvents(t.IP, t.Port, s.SamplePlayers, now)
+
 	// Enrich with Query data (UDP) and optionally with login handshake
 	// in the background. Both are best-effort enrichments; failures are
 	// expected when the server does not have those features enabled.
@@ -389,6 +396,15 @@ func (wk *worker) processTarget(ctx context.Context, t model.Target) {
 				}
 			}
 			s.ProbeKind = model.ProbeSLPAndQ
+			// Record Query player names as events (they are the authoritative
+			// player list from the server's perspective).
+			if len(qr.PlayerNames) > 0 {
+				qp := make([]model.SamplePlayer, len(qr.PlayerNames))
+				for i, name := range qr.PlayerNames {
+					qp[i] = model.SamplePlayer{Name: name}
+				}
+				wk.recordPlayerEvents(t.IP, t.Port, qp, now)
+			}
 			select {
 			case wk.results <- s:
 			case <-ctx.Done():
@@ -430,6 +446,20 @@ func (wk *worker) printFound(s model.Server) {
 		return
 	}
 	fmt.Fprint(wk.w, wk.styles.FormatFound(s))
+}
+
+func (wk *worker) recordPlayerEvents(ip string, port uint16, players []model.SamplePlayer, seenAt time.Time) {
+	if !wk.playerHistory || wk.repo == nil || len(players) == 0 {
+		return
+	}
+	for _, p := range players {
+		if p.Name == "" {
+			continue
+		}
+		if err := wk.repo.RecordPlayerEvent(context.Background(), ip, port, p, seenAt); err != nil {
+			slog.Warn("recording player event", "ip", ip, "port", port, "player", p.Name, "err", err)
+		}
+	}
 }
 
 func toModelSample(s []slp.SamplePlayer) []model.SamplePlayer {

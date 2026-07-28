@@ -39,6 +39,7 @@ type Config struct {
 	ProbeTimeout time.Duration `mapstructure:"probe_timeout"`
 	ProbeLogin   bool          `mapstructure:"probe_login"`
 	ProbeLoginMode string       `mapstructure:"probe_login_mode"`
+	ProbePlayerHistory bool     `mapstructure:"probe_player_history"`
 
 	// Update settings
 	UpdateQPS     int           `mapstructure:"update_qps"`
@@ -47,6 +48,7 @@ type Config struct {
 	UpdateLimit   int           `mapstructure:"update_limit"`
 	UpdateLogin   bool         `mapstructure:"update_login"`
 	UpdateLoginMode string       `mapstructure:"update_login_mode"`
+	UpdatePlayerHistory bool     `mapstructure:"update_player_history"`
 
 	// List settings
 	ListSort      string   `mapstructure:"list_sort"`
@@ -98,6 +100,7 @@ const (
 	DefaultProbeTimeout  = 1 * time.Second
 	DefaultProbeLogin    = true
 	DefaultProbeLoginMode = "detect"
+	DefaultProbePlayerHistory = true
 
 	// Update
 	DefaultUpdateQPS      = 100
@@ -106,6 +109,7 @@ const (
 	DefaultUpdateLimit    = 0
 	DefaultUpdateLogin    = true
 	DefaultUpdateLoginMode = "detect"
+	DefaultUpdatePlayerHistory = true
 
 	// List
 	DefaultListSort      = "recent"
@@ -180,6 +184,8 @@ var (
 	defaultUpdateLogin          = DefaultUpdateLogin
 	defaultProbeLoginMode        = DefaultProbeLoginMode
 	defaultUpdateLoginMode       = DefaultUpdateLoginMode
+	defaultProbePlayerHistory    = DefaultProbePlayerHistory
+	defaultUpdatePlayerHistory   = DefaultUpdatePlayerHistory
 	defaultASCII                  = DefaultASCII
 	defaultResume                = DefaultResume
 	defaultDebugLogin            = DefaultDebugLogin
@@ -318,6 +324,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("probe_timeout", defaultProbeTimeout)
 	v.SetDefault("probe_login", defaultProbeLogin)
 	v.SetDefault("probe_login_mode", defaultProbeLoginMode)
+	v.SetDefault("probe_player_history", defaultProbePlayerHistory)
 
 	// Update
 	v.SetDefault("update_qps", defaultUpdateQPS)
@@ -326,6 +333,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("update_limit", defaultUpdateLimit)
 	v.SetDefault("update_login", defaultUpdateLogin)
 	v.SetDefault("update_login_mode", defaultUpdateLoginMode)
+	v.SetDefault("update_player_history", defaultUpdatePlayerHistory)
 
 	// List
 	v.SetDefault("list_sort", defaultListSort)

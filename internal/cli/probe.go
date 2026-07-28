@@ -25,20 +25,21 @@ import (
 // flags, environment, and the user config file, and the input
 // to the rest of the probe pipeline.
 type probeConfig struct {
-	portsLo     uint16
-	portsHi     uint16
-	qps         int
-	workers     int
-	timeout     time.Duration
-	verbose     bool
-	ascii       bool
-	resume      bool
-	fileFlag    string
-	seedsDir    string
-	dbPath      string
-	login       bool
-	loginMode   login.StealthMode
-	loginUser   string
+	portsLo         uint16
+	portsHi         uint16
+	qps             int
+	workers         int
+	timeout         time.Duration
+	verbose         bool
+	ascii           bool
+	resume          bool
+	fileFlag        string
+	seedsDir        string
+	dbPath          string
+	login           bool
+	loginMode       login.StealthMode
+	loginUser       string
+	playerHistory   bool
 }
 
 // runProbe is the entry point for `doorsniff probe`. It loads config,
@@ -84,20 +85,21 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	fs.SetOutput(io.Discard)
 
 	var (
-		portsFlag        string
-		qpsFlag          int
-		workersFlag      int
-		timeoutFlag      time.Duration
-		verboseFlag      bool
-		verboseShortFlag bool
-		asciiFlag        bool
-		databaseFlag     string
-		seedsFlag        string
-		fileFlag         string
-		resumeFlag       bool
-		loginFlag        bool
-		loginModeFlag    string
-		loginUserFlag    string
+		portsFlag          string
+		qpsFlag            int
+		workersFlag        int
+		timeoutFlag        time.Duration
+		verboseFlag        bool
+		verboseShortFlag   bool
+		asciiFlag          bool
+		databaseFlag       string
+		seedsFlag          string
+		fileFlag           string
+		resumeFlag         bool
+		loginFlag          bool
+		loginModeFlag      string
+		loginUserFlag      string
+		playerHistoryFlag  bool
 	)
 	fs.StringVar(&portsFlag, "ports", cfg.Ports, "port range, e.g. 25565, 25500-25600, 1-65535")
 	fs.IntVar(&qpsFlag, "qps", cfg.ProbeQPS, "global QPS limit")
@@ -113,6 +115,7 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	fs.BoolVar(&loginFlag, "login", cfg.ProbeLogin, "perform login handshake to detect online/offline mode (deprecated: prefer --login-mode)")
 	fs.StringVar(&loginModeFlag, "login-mode", cfg.ProbeLoginMode, "login handshake aggressiveness: off | detect | intrusive")
 	fs.StringVar(&loginUserFlag, "login-user", cfg.LoginUser, "username for login handshake")
+	fs.BoolVar(&playerHistoryFlag, "playerhistory", cfg.ProbePlayerHistory, "record player visit history")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -149,20 +152,21 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	}
 
 	return &probeConfig{
-		portsLo:   lo,
-		portsHi:   hi,
-		qps:       qpsFlag,
-		workers:   workersFlag,
-		timeout:   timeoutFlag,
-		verbose:   verboseFlag || verboseShortFlag,
-		ascii:     asciiFlag,
-		resume:    resumeFlag,
-		fileFlag:  fileFlag,
-		seedsDir:  seedsDir,
-		dbPath:    dbPath,
-		login:     loginMode != login.StealthOff,
-		loginMode: loginMode,
-		loginUser: loginUserFlag,
+		portsLo:       lo,
+		portsHi:       hi,
+		qps:           qpsFlag,
+		workers:       workersFlag,
+		timeout:       timeoutFlag,
+		verbose:       verboseFlag || verboseShortFlag,
+		ascii:         asciiFlag,
+		resume:        resumeFlag,
+		fileFlag:      fileFlag,
+		seedsDir:      seedsDir,
+		dbPath:        dbPath,
+		login:         loginMode != login.StealthOff,
+		loginMode:     loginMode,
+		loginUser:     loginUserFlag,
+		playerHistory: playerHistoryFlag,
 	}, nil
 }
 
@@ -226,19 +230,20 @@ func runAndSummarize(w io.Writer, pc *probeConfig, repo *storage.Repository) *sc
 	}
 
 	stats, err := scanner.RunScan(ctx, scanner.Options{
-		Workers:    pc.workers,
-		QPS:        pc.qps,
-		Timeout:    pc.timeout,
-		PortsLo:    pc.portsLo,
-		PortsHi:    pc.portsHi,
-		Repo:       repo,
-		Seeds:      seeds,
-		Verbose:    pc.verbose,
-		ASCII:      pc.ascii,
-		Resume:     pc.resume,
-		Login:      pc.login,
-		LoginMode:  pc.loginMode,
-		LoginUser:  pc.loginUser,
+		Workers:       pc.workers,
+		QPS:           pc.qps,
+		Timeout:       pc.timeout,
+		PortsLo:       pc.portsLo,
+		PortsHi:       pc.portsHi,
+		Repo:          repo,
+		Seeds:         seeds,
+		Verbose:       pc.verbose,
+		ASCII:         pc.ascii,
+		Resume:        pc.resume,
+		Login:         pc.login,
+		LoginMode:     pc.loginMode,
+		LoginUser:     pc.loginUser,
+		PlayerHistory: pc.playerHistory,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "[ERROR] scanner: %v\n", err)
@@ -313,6 +318,7 @@ func probeUsage() string {
 	b.WriteString("  --login             DEPRECATED, prefer --login-mode — keeps legacy bool behaviour\n")
 	b.WriteString(fmt.Sprintf("  --login-mode MODE   off | detect | intrusive (default %s)\n", config.DefaultProbeLoginMode))
 	b.WriteString(fmt.Sprintf("  --login-user STR    username for login handshake (default %s)\n", config.DefaultLoginUser))
+	b.WriteString(fmt.Sprintf("  --playerhistory     record player visit history (default %t)\n", config.DefaultProbePlayerHistory))
 	return b.String()
 }
 
