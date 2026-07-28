@@ -13,11 +13,10 @@ concurrency, the Minecraft wire protocols (SLP, legacy SLP, Login,
 Query), and the Charm TUI stack on a real codebase.
 
 > [!NOTE]
-> Este projeto foi escrito majoritariamente com o auxílio de IA
-> ("vibecode"). O código, os testes e boa parte da documentação foram
-> gerados e revisados em parceria com um modelo de linguagem. Use por
-> sua conta e risco; revise antes de confiar em qualquer parte para
-> uso em produção.
+> This project was largely written with AI assistance ("vibecode").
+> The code, tests, and most of the documentation were generated and
+> reviewed in partnership with a language model. Use at your own risk;
+> review carefully before relying on any part for production use.
 
 ## Quick start
 
