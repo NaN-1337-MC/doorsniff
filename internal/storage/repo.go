@@ -13,7 +13,7 @@ import (
 
 // ListOptions constrains and orders ListServers queries.
 type ListOptions struct {
-	Limit     int    // 0 = default 50
+	Limit     int    // 0 (or negative) = no LIMIT clause (return every match)
 	Offset    int    // 0 = from start
 	OrderBy   string // "last_seen" | "players" | "first_seen"; default "last_seen"
 	Version   int    // 0 = no filter
@@ -135,11 +135,12 @@ ON CONFLICT (ip, port) DO UPDATE SET
 
 // ListServers returns a slice of servers matching opts, ordered per
 // opts.OrderBy.
+//
+// Limit: 0 (or negative) means no LIMIT clause is added — the caller
+// gets every match. SQLite treats `LIMIT 0` as "return zero rows"
+// (not "unlimited"), so this is implemented by omitting the clause
+// entirely rather than passing the value through.
 func (r *Repository) ListServers(ctx context.Context, opts ListOptions) ([]model.Server, error) {
-	if opts.Limit <= 0 {
-		opts.Limit = 50
-	}
-
 	orderBy := "last_seen DESC"
 	switch opts.OrderBy {
 	case "players":
@@ -185,10 +186,20 @@ SELECT ip, port, first_seen, last_seen, last_latency_ms,
        login_mode, last_login
 FROM servers%s
 ORDER BY %s
-LIMIT ? OFFSET ?;
 `, where, orderBy)
 
-	args = append(args, opts.Limit, opts.Offset)
+	// LIMIT/OFFSET are only appended for positive Limit/Offset so
+	// that callers can ask for "everything". SQLite treats `LIMIT 0`
+	// as "return zero rows", which is not what we want.
+	if opts.Limit > 0 {
+		q += "LIMIT ?\n"
+		args = append(args, opts.Limit)
+	}
+	if opts.Offset > 0 {
+		q += "OFFSET ?\n"
+		args = append(args, opts.Offset)
+	}
+	q += ";"
 
 	rows, err := r.db.conn.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -225,7 +236,7 @@ type ListQuery struct {
 	PortLo        uint16   // 0 = no filter
 	PortHi        uint16   // 0 = no filter
 	OrderBy       string   // SQL ORDER BY fragment, default "last_seen DESC"
-	Limit         int      // 0 = default 50
+	Limit         int      // 0 (or negative) = no LIMIT clause (return every match)
 
 	// New filters
 	Player      []string  // player name substrings (OR'd, searches in sample_players JSON)
@@ -241,10 +252,12 @@ type ListQuery struct {
 }
 
 // ListServersFiltered executes a flexible query built from ListQuery.
+//
+// Limit: 0 (or negative) means no LIMIT clause is added — the caller
+// gets every match. This matches the --limit=N flag semantics where
+// 0 means "no limit / all rows". SQLite treats `LIMIT 0` as "return
+// zero rows", so the clause is omitted entirely when unset.
 func (r *Repository) ListServersFiltered(ctx context.Context, q ListQuery) ([]model.Server, error) {
-	if q.Limit <= 0 {
-		q.Limit = 50
-	}
 	if q.OrderBy == "" {
 		q.OrderBy = "last_seen DESC"
 	}
@@ -380,10 +393,14 @@ SELECT ip, port, first_seen, last_seen, last_latency_ms,
        login_mode, last_login
 FROM servers%s
 ORDER BY %s
-LIMIT ?;
 `, where, q.OrderBy)
 
-	args = append(args, q.Limit)
+	// Only add LIMIT when > 0 so the caller can ask for "every match".
+	if q.Limit > 0 {
+		sql += "LIMIT ?\n"
+		args = append(args, q.Limit)
+	}
+	sql += ";"
 
 	rows, err := r.db.conn.QueryContext(ctx, sql, args...)
 	if err != nil {

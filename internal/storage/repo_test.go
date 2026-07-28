@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -147,6 +148,9 @@ func TestListFilters(t *testing.T) {
 		{name: "by country", opts: ListOptions{Country: "US"}, want: 1},
 		{name: "by port", opts: ListOptions{Port: 25575}, want: 1},
 		{name: "limit 2", opts: ListOptions{Limit: 2}, want: 2},
+		{name: "limit 0 returns all (3)", opts: ListOptions{Limit: 0}, want: 3},
+		{name: "negative limit returns all", opts: ListOptions{Limit: -10}, want: 3},
+		{name: "limit 100 returns all (3)", opts: ListOptions{Limit: 100}, want: 3},
 		{name: "version + country (none)", opts: ListOptions{Version: 47, Country: "BR"}, want: 0},
 	}
 
@@ -165,6 +169,53 @@ func TestListFilters(t *testing.T) {
 			}
 			if len(got) != tt.want {
 				t.Errorf("len = %d, want %d", len(got), tt.want)
+			}
+		})
+	}
+}
+
+// TestListServersFiltered_LimitZeroIsUnlimited guards the
+// regression fixed for --limit=0. Pre-fix, ListServersFiltered
+// force-overrode Limit <= 0 to 50, which made `update --limit=0`
+// effectively a no-op (treated as "use default"). Post-fix, Limit=0
+// (or any negative value) must return every match.
+func TestListServersFiltered_LimitZeroIsUnlimited(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	repo, cleanup := newTestDB(t)
+	defer cleanup()
+
+	const N = 75 // > 50 so we can prove the legacy "default 50" is gone
+	for i := 0; i < N; i++ {
+		s := model.Server{
+			IP:        fmt.Sprintf("10.0.0.%d", i+1),
+			Port:      25565,
+			FirstSeen: now,
+			LastSeen:  now,
+		}
+		if err := repo.UpsertServer(ctx, s); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+	}
+
+	cases := []struct {
+		name    string
+		limit   int
+		wantLen int
+	}{
+		{"limit 0 -> all rows", 0, N},
+		{"limit -1 -> all rows", -1, N},
+		{"limit 10 -> 10 rows", 10, 10},
+		{"limit 100 -> all rows (clamped to count)", 100, N},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := repo.ListServersFiltered(ctx, ListQuery{Limit: tc.limit, OrderBy: "last_seen ASC"})
+			if err != nil {
+				t.Fatalf("ListServersFiltered: %v", err)
+			}
+			if len(got) != tc.wantLen {
+				t.Errorf("len = %d, want %d", len(got), tc.wantLen)
 			}
 		})
 	}

@@ -39,21 +39,22 @@ func runUpdate(args []string) error {
 	fs.SetOutput(io.Discard)
 
 	var (
-		versionFlag    string
-		engineFlag     string
-		playersFlag    string
-		maxPlayersFlag string
-		portFlag      string
-		motdFlag      string
-		qpsFlag       int
-		workersFlag   int
-		timeoutFlag   time.Duration
-		limitFlag     int
-		databaseFlag  string
-		loginFlag     bool
-		loginUserFlag string
-		debugLoginFlag bool
-		asciiFlag     bool
+		versionFlag      string
+		engineFlag       string
+		playersFlag      string
+		maxPlayersFlag   string
+		portFlag         string
+		motdFlag         string
+		qpsFlag          int
+		workersFlag      int
+		timeoutFlag      time.Duration
+		limitFlag        int
+		databaseFlag     string
+		loginFlag        bool
+		loginModeFlag    string
+		loginUserFlag    string
+		debugLoginFlag   bool
+		asciiFlag        bool
 	)
 
 	fs.StringVar(&versionFlag, "version", "", "filter by version (e.g. 1.21.1)")
@@ -67,7 +68,8 @@ func runUpdate(args []string) error {
 	fs.DurationVar(&timeoutFlag, "timeout", cfg.UpdateTimeout, "per-probe timeout")
 	fs.IntVar(&limitFlag, "limit", cfg.UpdateLimit, "max servers to update (0 = all)")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
-	fs.BoolVar(&loginFlag, "login", cfg.UpdateLogin, "perform login handshake to detect online/offline mode")
+	fs.BoolVar(&loginFlag, "login", cfg.UpdateLogin, "perform login handshake to detect online/offline mode (deprecated: prefer --login-mode)")
+	fs.StringVar(&loginModeFlag, "login-mode", cfg.UpdateLoginMode, "login handshake aggressiveness: off | detect | intrusive")
 	fs.StringVar(&loginUserFlag, "login-user", cfg.LoginUser, "username for login handshake")
 	fs.BoolVar(&debugLoginFlag, "debug-login", cfg.DebugLogin, "dump raw login packet bytes + disconnect reasons to stderr (debug)")
 	fs.BoolVar(&asciiFlag, "ascii", cfg.ASCII, "plain output (no colour, ASCII border and bar)")
@@ -104,6 +106,14 @@ func runUpdate(args []string) error {
 
 	versions := ParseVersionList(versionFlag)
 
+	loginMode, err := login.ParseStealthMode(loginModeFlag)
+	if err != nil {
+		return fmt.Errorf("parsing --login-mode: %w", err)
+	}
+	if !loginFlag {
+		loginMode = login.StealthOff
+	}
+
 	dbPath := cfg.DatabasePath
 	if databaseFlag != "" {
 		dbPath = databaseFlag
@@ -117,6 +127,10 @@ func runUpdate(args []string) error {
 		return fmt.Errorf("opening database: %w", err)
 	}
 	defer func() { _ = db.Close() }()
+
+	if err := db.EnsureSchema(ctx); err != nil {
+		return fmt.Errorf("ensuring schema: %w", err)
+	}
 
 	repo := storage.NewRepository(db)
 
@@ -191,9 +205,17 @@ func runUpdate(args []string) error {
 				*addrPtr = addr
 				state.Current.Store(addrPtr)
 
-			s, err := probeServer(gctx, srv.IP, srv.Port, timeoutFlag, loginFlag, loginUserFlag, srv.VersionProtocol)
+			s, err := probeServer(gctx, srv.IP, srv.Port, timeoutFlag, loginMode, loginUserFlag, srv.VersionProtocol)
 			if err != nil {
 				ustats.checked.Add(1)
+				// Even if the server didn't respond, record that we tried.
+				// last_seen becomes "last time we attempted contact" rather
+				// than "last time server was reachable".
+				s = srv
+				s.LastSeen = time.Now().UTC()
+				if err := repo.UpsertServer(gctx, s); err != nil {
+					return nil
+				}
 				return nil
 			}
 
@@ -627,7 +649,7 @@ func printUpdateSummary(w io.Writer, stats *updateStats, d time.Duration, pps fl
 	fmt.Fprintln(w, rule)
 }
 
-func probeServer(ctx context.Context, host string, port uint16, timeout time.Duration, doLogin bool, loginUser string, protoVersion int) (model.Server, error) {
+func probeServer(ctx context.Context, host string, port uint16, timeout time.Duration, loginMode login.StealthMode, loginUser string, protoVersion int) (model.Server, error) {
 	open, err := probe(ctx, host, port, timeout)
 	if err != nil {
 		return model.Server{}, err
@@ -702,17 +724,22 @@ func probeServer(ctx context.Context, host string, port uint16, timeout time.Dur
 		s.ProbeKind = model.ProbeSLPAndQ
 	}
 
-	if doLogin {
+	if loginMode != login.StealthOff {
 		pv := int32(login.ProtocolVersionLegacy())
 		if protoVersion > 0 {
 			pv = int32(protoVersion)
 		}
-		lr, lerr := login.Handshake(ctx, host, port, timeout, loginUser, pv, slog.Default())
+		lr, lerr := login.Handshake(ctx, host, port, timeout, loginUser, pv, loginMode, slog.Default())
 		if lerr != nil {
 			slog.Debug("login probe failed", "host", host, "port", port, "err", lerr)
 		}
 		if lr != nil {
-			s.LoginMode = lr.Mode.String()
+			modeStr := lr.Mode.String()
+			if lr.Mode.IsPersistent() {
+				s.LoginMode = modeStr
+			} else {
+				s.LastLogin = modeStr
+			}
 		}
 	}
 
@@ -767,7 +794,8 @@ func updateUsage() string {
 	b.WriteString(fmt.Sprintf("  --timeout DUR    per-probe timeout (default %s)\n", config.DefaultUpdateTimeout))
 	b.WriteString(fmt.Sprintf("  --limit N        max servers to update (default %d, 0 = all)\n", config.DefaultUpdateLimit))
 	b.WriteString("  --database PATH  override database path\n")
-	b.WriteString("  --login          perform login handshake to detect online/offline mode\n")
+	b.WriteString("  --login          DEPRECATED, prefer --login-mode — keeps legacy bool behaviour\n")
+	b.WriteString(fmt.Sprintf("  --login-mode MODE  off | detect | intrusive (default %s)\n", config.DefaultUpdateLoginMode))
 	b.WriteString(fmt.Sprintf("  --login-user STR username for login handshake (default %s)\n", config.DefaultLoginUser))
 	b.WriteString("  --debug-login    dump raw login packet bytes + disconnect reasons to stderr\n")
 	b.WriteString("  --ascii          plain output (no colour, ASCII border and bar)\n")
@@ -776,6 +804,6 @@ func updateUsage() string {
 	b.WriteString("  doorsniff update\n")
 	b.WriteString("  doorsniff update --version=1.21.1 --engine=paper\n")
 	b.WriteString("  doorsniff update --players='>0' --maxplayers='>=50'\n")
-	b.WriteString("  doorsniff update --login\n")
+	b.WriteString("  doorsniff update --login-mode=intrusive\n")
 	return b.String()
 }
