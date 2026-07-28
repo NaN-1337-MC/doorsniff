@@ -173,7 +173,7 @@ func runList(args []string) error {
 		PlayerArgs:    playerArgs,
 		MaxPlayerSQL:  maxPlayerSQL,
 		MaxPlayerArgs: maxPlayerArgs,
-		Versions:      versions,
+		Versions:      nil, // version filtering done in Go for range support
 		Engine:        engineFlag,
 		MOTD:          motdFlag,
 		LoginMode:     normalizeLoginMode(loginModeFlag),
@@ -196,6 +196,23 @@ func runList(args []string) error {
 	servers, err := repo.ListServersFiltered(ctx, query)
 	if err != nil {
 		return fmt.Errorf("querying servers: %w", err)
+	}
+
+	// Filter by version in Go to support range responses like "1.20.x-1.21.x"
+	if len(versions) > 0 {
+		filtered := make([]model.Server, 0, len(servers))
+		for _, s := range servers {
+			if s.VersionName == "" {
+				continue
+			}
+			for _, v := range versions {
+				if VersionMatches(s.VersionName, v) {
+					filtered = append(filtered, s)
+					break
+				}
+			}
+		}
+		servers = filtered
 	}
 
 	if len(servers) == 0 {

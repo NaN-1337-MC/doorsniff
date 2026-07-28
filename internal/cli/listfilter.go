@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -137,7 +138,6 @@ func (f PlayerFilter) ToSQLColumn(column string) (string, []any) {
 }
 
 // ParseVersionList parses a comma-separated version list.
-// Each element is matched as a substring against version_name.
 func ParseVersionList(s string) []string {
 	if s == "" {
 		return nil
@@ -151,6 +151,130 @@ func ParseVersionList(s string) []string {
 		}
 	}
 	return out
+}
+
+// versionMatch checks if the user-provided version input matches
+// a server-reported version string that may be an exact version
+// (e.g. "1.20.4") or a range (e.g. "1.20.x-1.21.x").
+//
+// Range syntax: "X.y.x-Z.w.x" means any version from X.y.0 (inclusive)
+// to Z.w.0 (exclusive). "X.y.x" alone means the same as X.y.0 to (X.y+1).0.
+func VersionMatches(serverVersion, userInput string) bool {
+	vm := parseServerVersion(serverVersion)
+	if vm == nil {
+		return false
+	}
+	return vm.matches(userInput)
+}
+
+// versionMatch is a version comparison target.
+type versionMatch interface {
+	matches(input string) bool
+}
+
+// exactVersion matches a single exact version string.
+type exactVersion string
+
+func (e exactVersion) matches(input string) bool {
+	return string(e) == input
+}
+
+// rangeVersion matches any version in [lo, hi).
+type rangeVersion struct {
+	lo majorMinor
+	hi majorMinor
+}
+
+func (r rangeVersion) matches(input string) bool {
+	mv, ok := parseMajorMinor(input)
+	if !ok {
+		return false
+	}
+	return mv.GE(r.lo) && mv.LT(r.hi)
+}
+
+// majorMinor represents a major.minor version for ordering.
+type majorMinor struct{ major, minor int }
+
+func (m majorMinor) GE(other majorMinor) bool {
+	if m.major != other.major {
+		return m.major > other.major
+	}
+	return m.minor >= other.minor
+}
+
+func (m majorMinor) LT(other majorMinor) bool {
+	if m.major != other.major {
+		return m.major < other.major
+	}
+	return m.minor < other.minor
+}
+
+func parseMajorMinor(s string) (majorMinor, bool) {
+	parts := strings.Split(s, ".")
+	if len(parts) < 2 {
+		return majorMinor{}, false
+	}
+	maj, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return majorMinor{}, false
+	}
+	min, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return majorMinor{}, false
+	}
+	return majorMinor{major: maj, minor: min}, true
+}
+
+// parseServerVersion extracts a version pattern from a raw server
+// version_name string such as "Paper 1.20.4" or "1.20.x-1.21.x".
+func parseServerVersion(raw string) versionMatch {
+	s := strings.TrimSpace(raw)
+
+	// Try to extract version number from the string.
+	// Pattern: major.minor.x (possibly followed by -major.minor.x)
+	// Examples: "1.20.x-1.21.x", "Paper 1.20.4", "1.20.4"
+	//
+	// Regex breakdown:
+	// - Optional prefix (Paper, Spigot, BungeeCord, etc.): [^\d]*
+	// - Major.minor.patch or major.minor.x: (\d+\.\d+(?:\.\d+|\.x))
+	// - Optional range suffix: (?:-\d+\.\d+\.x)?
+	mainRX := regexp.MustCompile(`[^\d]*(\d+\.\d+(?:\.\d+|\.x))`)
+	m := mainRX.FindStringSubmatch(s)
+	if m == nil {
+		return nil
+	}
+	version := m[1]
+
+	// Check for range pattern: "1.20.x-1.21.x"
+	rangeRX := regexp.MustCompile(`(\d+)\.(\d+)\.x-(\d+)\.(\d+)\.x`)
+	rm := rangeRX.FindStringSubmatch(version)
+	if rm != nil {
+		lo := majorMinor{major: toInt(rm[1]), minor: toInt(rm[2])}
+		hi := majorMinor{major: toInt(rm[3]), minor: toInt(rm[4])}
+		return rangeVersion{lo: lo, hi: hi}
+	}
+
+	// Check for single x pattern: "1.20.x"
+	singleX := regexp.MustCompile(`(\d+)\.(\d+)\.x$`)
+	sxm := singleX.FindStringSubmatch(version)
+	if sxm != nil {
+		lo := majorMinor{major: toInt(sxm[1]), minor: toInt(sxm[2])}
+		hi := majorMinor{major: lo.major, minor: lo.minor + 1}
+		// Edge case: 1.20.x -> hi is 1.21.0
+		if lo.minor == 19 { // 1.20.x -> 1.21.0
+			hi = majorMinor{major: lo.major + 1, minor: 0}
+		}
+		return rangeVersion{lo: lo, hi: hi}
+	}
+
+	// Exact version: "1.20.4"
+	return exactVersion(version)
+}
+
+func toInt(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 // ToVersionSQL returns a SQL fragment and args for version matching.
