@@ -21,9 +21,10 @@ func Run(args []string) error {
 		return runUpdate(rest)
 	case "init":
 		return runInit(rest)
-	case "version", "-v", "--version":
-		fmt.Println("doorsniff dev (no version yet)")
-		return nil
+	case "version":
+		return runVersion(rest)
+	case "-v", "--version":
+		return runVersion(rest)
 	case "help", "-h", "--help":
 		if len(rest) > 0 {
 			return helpCmd(rest[0])
@@ -38,20 +39,34 @@ func Run(args []string) error {
 	}
 }
 
-func usage() {
-// Gáttaþefur
-	fmt.Println(`
+func banner() string {
+	tagline := randomTagline()
+	pad := 28 - len(tagline)/2
+	if pad < 0 {
+		pad = 0
+	}
+	spaces := ""
+	for i := 0; i < pad; i++ {
+		spaces += " "
+	}
+	// Gáttaþefur
+	return `
                         ▓████████▓
                        ▓░        █▓
                       █  █████  █
                      █  █     █ █
                       ▓█ ▄   ▄ █
-                 ▄▄▄▄  █       █  ▄▄▄▄
+                 ▄▄▄▄  █ ▄   ▄ █  ▄▄▄▄
             ░░▒▓██  ██████   ██████  ██▓▒░░
-                 ▀██▀    █   █    ▀██▀
-                          ███
-         Doorsniif, a Minecraft server scanner.
+           ____  ▀██▀    █   █    ▀██▀ ___ ___
+          |    \ ___ ___ _███___ ___|_|  _|  _|
+          |  |  | . | . |  _|_ -|   | |  _|  _|
+          |____/|___|___|_| |___|_|_|_|_| |_|
+` + spaces + tagline + "\n"
+}
 
+func usage() {
+	fmt.Print(banner() + `
 Usage:
   doorsniff <command> [flags]
 
