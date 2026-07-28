@@ -52,6 +52,10 @@ type PoolConfig struct {
 	// Login, when true, performs a login handshake after successful
 	// SLP to determine online/offline mode.
 	Login   bool
+	// LoginMode controls how aggressive the handshake is. See
+	// login.StealthMode. Honours Login above: Login=false forces
+	// StealthOff. Defaults to login.DefaultStealthMode (detect).
+	LoginMode login.StealthMode
 	// LoginUser is the username sent in the Login Start packet.
 	LoginUser string
 
@@ -170,6 +174,7 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (*Sta
 			state:         state,
 			processedHook: cfg.ProcessedHook,
 			login:         cfg.Login,
+			loginMode:     cfg.LoginMode,
 			loginUser:     cfg.LoginUser,
 		}
 		g.Go(func() error {
@@ -210,6 +215,7 @@ type worker struct {
 	state         *ProgressState
 	processedHook func(model.Target)
 	login         bool
+	loginMode     login.StealthMode
 	loginUser     string
 }
 
@@ -391,7 +397,11 @@ func (wk *worker) processTarget(ctx context.Context, t model.Target) {
 		}
 
 		if wk.login {
-			loginres, lerr := login.Handshake(ctx, t.IP, t.Port, wk.timeout, wk.loginUser, login.ProtocolVersionLegacy(), slog.Default())
+			mode := wk.loginMode
+			if mode == "" {
+				mode = login.DefaultStealthMode
+			}
+			loginres, lerr := login.Handshake(ctx, t.IP, t.Port, wk.timeout, wk.loginUser, login.ProtocolVersionLegacy(), mode, slog.Default())
 			if lerr != nil {
 				slog.Debug("login probe failed", "ip", t.IP, "port", t.Port, "err", lerr)
 			}

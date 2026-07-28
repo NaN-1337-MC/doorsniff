@@ -15,6 +15,7 @@ import (
 
 	"github.com/renanbray/doorsniff/internal/config"
 	"github.com/renanbray/doorsniff/internal/model"
+	"github.com/renanbray/doorsniff/internal/protocol/login"
 	"github.com/renanbray/doorsniff/internal/scanner"
 	"github.com/renanbray/doorsniff/internal/storage"
 )
@@ -36,6 +37,7 @@ type probeConfig struct {
 	seedsDir    string
 	dbPath      string
 	login       bool
+	loginMode   login.StealthMode
 	loginUser   string
 }
 
@@ -94,6 +96,7 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 		fileFlag         string
 		resumeFlag       bool
 		loginFlag        bool
+		loginModeFlag    string
 		loginUserFlag    string
 	)
 	fs.StringVar(&portsFlag, "ports", cfg.Ports, "port range, e.g. 25565, 25500-25600, 1-65535")
@@ -107,7 +110,8 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	fs.StringVar(&seedsFlag, "seeds", "", "override seeds directory")
 	fs.StringVar(&fileFlag, "file", "", "read seeds from a single file instead of the seeds directory")
 	fs.BoolVar(&resumeFlag, "resume", cfg.Resume, "skip seeds that were fully scanned in a previous run")
-	fs.BoolVar(&loginFlag, "login", cfg.ProbeLogin, "perform login handshake to detect online/offline mode")
+	fs.BoolVar(&loginFlag, "login", cfg.ProbeLogin, "perform login handshake to detect online/offline mode (deprecated: prefer --login-mode)")
+	fs.StringVar(&loginModeFlag, "login-mode", cfg.ProbeLoginMode, "login handshake aggressiveness: off | detect | intrusive")
 	fs.StringVar(&loginUserFlag, "login-user", cfg.LoginUser, "username for login handshake")
 
 	if err := fs.Parse(args); err != nil {
@@ -121,6 +125,18 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	lo, hi, err := scanner.ParsePortRange(portsFlag)
 	if err != nil {
 		return nil, fmt.Errorf("parsing --ports: %w", err)
+	}
+
+	loginMode, err := login.ParseStealthMode(loginModeFlag)
+	if err != nil {
+		return nil, fmt.Errorf("parsing --login-mode: %w", err)
+	}
+
+	// --login=false is the explicit "no handshake" request; map it
+	// to mode=off regardless of --login-mode. The legacy --login
+	// flag is honoured otherwise so existing configs keep working.
+	if !loginFlag {
+		loginMode = login.StealthOff
 	}
 
 	seedsDir := cfg.SeedsDir
@@ -144,7 +160,8 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 		fileFlag:  fileFlag,
 		seedsDir:  seedsDir,
 		dbPath:    dbPath,
-		login:     loginFlag,
+		login:     loginMode != login.StealthOff,
+		loginMode: loginMode,
 		loginUser: loginUserFlag,
 	}, nil
 }
@@ -209,18 +226,19 @@ func runAndSummarize(w io.Writer, pc *probeConfig, repo *storage.Repository) *sc
 	}
 
 	stats, err := scanner.RunScan(ctx, scanner.Options{
-		Workers:   pc.workers,
-		QPS:       pc.qps,
-		Timeout:   pc.timeout,
-		PortsLo:   pc.portsLo,
-		PortsHi:   pc.portsHi,
-		Repo:      repo,
-		Seeds:     seeds,
-		Verbose:   pc.verbose,
-		ASCII:     pc.ascii,
-		Resume:    pc.resume,
-		Login:     pc.login,
-		LoginUser: pc.loginUser,
+		Workers:    pc.workers,
+		QPS:        pc.qps,
+		Timeout:    pc.timeout,
+		PortsLo:    pc.portsLo,
+		PortsHi:    pc.portsHi,
+		Repo:       repo,
+		Seeds:      seeds,
+		Verbose:    pc.verbose,
+		ASCII:      pc.ascii,
+		Resume:     pc.resume,
+		Login:      pc.login,
+		LoginMode:  pc.loginMode,
+		LoginUser:  pc.loginUser,
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "[ERROR] scanner: %v\n", err)
@@ -292,7 +310,8 @@ func probeUsage() string {
 	b.WriteString("  --database PATH     override database path\n")
 	b.WriteString("  --verbose, -v       show per-target error lines (timeouts, SLP failures)\n")
 	b.WriteString("  --ascii             plain output (no colour, ASCII border and bar)\n")
-	b.WriteString("  --login             perform login handshake to detect online/offline mode\n")
+	b.WriteString("  --login             DEPRECATED, prefer --login-mode — keeps legacy bool behaviour\n")
+	b.WriteString(fmt.Sprintf("  --login-mode MODE   off | detect | intrusive (default %s)\n", config.DefaultProbeLoginMode))
 	b.WriteString(fmt.Sprintf("  --login-user STR    username for login handshake (default %s)\n", config.DefaultLoginUser))
 	return b.String()
 }

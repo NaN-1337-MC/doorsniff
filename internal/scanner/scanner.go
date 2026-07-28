@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/renanbray/doorsniff/internal/model"
+	"github.com/renanbray/doorsniff/internal/protocol/login"
 	"github.com/renanbray/doorsniff/internal/storage"
 )
 
@@ -24,7 +25,14 @@ type Options struct {
 	Verbose   bool
 	ASCII     bool
 	Resume    bool
+	// Login is the legacy bool toggle. When false it forces
+	// LoginMode = StealthOff regardless of what the caller set.
+	// Kept so existing configs work without changes.
 	Login     bool
+	// LoginMode controls how aggressive the login handshake is
+	// (off | detect | intrusive). Defaults to login.DefaultStealthMode
+	// (detect) when left at the zero value.
+	LoginMode login.StealthMode
 	LoginUser string
 }
 
@@ -60,6 +68,14 @@ func RunScan(ctx context.Context, opts Options) (*Stats, error) {
 	state := NewProgressState()
 	targets := generateTargets(ctx, remaining, opts.PortsLo, opts.PortsHi, progress, onSeedDone, state)
 
+	loginMode := opts.LoginMode
+	if loginMode == "" {
+		loginMode = login.DefaultStealthMode
+	}
+	if !opts.Login {
+		loginMode = login.StealthOff
+	}
+
 	return Run(ctx, PoolConfig{
 		Workers:   opts.Workers,
 		QPS:       opts.QPS,
@@ -71,7 +87,8 @@ func RunScan(ctx context.Context, opts Options) (*Stats, error) {
 		PortsLo:   opts.PortsLo,
 		PortsHi:   opts.PortsHi,
 		State:     state,
-		Login:     opts.Login,
+		Login:     loginMode != login.StealthOff,
+		LoginMode: loginMode,
 		LoginUser: opts.LoginUser,
 	}, targets)
 }

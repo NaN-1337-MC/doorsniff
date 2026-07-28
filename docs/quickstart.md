@@ -182,7 +182,8 @@ one to get fresh player counts, MOTD, and version info.
 | `--qps N` | `200` | Global QPS limit |
 | `--workers N` | `64` | Worker pool size |
 | `--limit N` | `0` | Max servers to update (0 = all) |
-| `--login` | `false` | Perform login handshake to detect online/offline mode |
+| `--login` | `false` | DEPRECATED — prefer `--login-mode` |
+| `--login-mode MODE` | `detect` | `off` \| `detect` \| `intrusive` — see Login modes below |
 | `--login-user NAME` | `Herobrine` | Username for login handshake |
 | `--debug-login` | `false` | Dump raw login packets to stderr |
 | `--ascii` | `false` | Plain output (no colour, ASCII bar) |
@@ -197,12 +198,32 @@ doorsniff update
 # Update only Paper servers with players.
 doorsniff update --engine paper --players '>0'
 
-# Update with login handshake detection.
-doorsniff update --login
+# Update with login handshake detection (default mode is `detect`).
+doorsniff update --login-mode=detect
+
+# Or be explicit about aggressiveness:
+doorsniff update --login-mode=intrusive   # keep the connection open longer
+doorsniff update --login-mode=off        # SLP only, no handshake
 
 # Update max 100 servers on non-default ports.
 doorsniff update --port '25500-25600' --limit 100
 ```
+
+### Login modes (`--login-mode`)
+
+The login handshake can leak information (the server may broadcast
+`"Herobrine joined the game"` while we are still trying to read the
+Login Success packet). Choose how aggressive doorsniff should be:
+
+| Mode          | Behaviour                                                                                              |
+|---------------|--------------------------------------------------------------------------------------------------------|
+| `off`         | Skip the login handshake entirely. The server only sees a Server List Ping (SLP).                     |
+| `detect`      | Send the Login Start packet and close as soon as we read the first reply. Best-effort stealth. Default. |
+| `intrusive`   | Same as `detect` but with the full timeout — the server has time to fully process the login attempt.    |
+
+The legacy `--login` boolean still works: `--login=false` is equivalent
+to `--login-mode=off`; `--login=true` (the default) lets
+`--login-mode` decide.
 
 ## Configuration
 

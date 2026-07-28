@@ -7,11 +7,13 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -23,12 +25,92 @@ const (
 	// regardless of client version. Useful for probing servers that
 	// don't speak modern SLP.
 	protocolVersionLegacy int32 = -1
+
+	// detectReadDeadline is the per-attempt read deadline used by
+	// StealthDetect. It is shorter than the caller's timeout to bias
+	// towards giving up early: once we have something to classify we
+	// do not want to wait for the server to finish broadcasting
+	// "X joined the game".
+	detectReadDeadline = 300 * time.Millisecond
+
+	// intrusiveReadDeadline is the per-attempt read deadline used by
+	// StealthIntrusive. Long enough for the server to process the
+	// login attempt and respond (and possibly broadcast) before we
+	// close the connection.
+	intrusiveReadDeadline = 5 * time.Second
 )
+
+// StealthMode controls how aggressive the login probe is. Ordered
+// from most stealthy (off) to least (intrusive).
+type StealthMode string
+
+const (
+	// StealthOff skips the login handshake entirely. SLP still runs,
+	// so the server only sees a harmless status request from our IP.
+	StealthOff StealthMode = "off"
+
+	// StealthDetect sends the Login Start packet and tears the
+	// connection down as soon as we read the first reply (or the
+	// short read deadline expires). Goal: classify the server
+	// (offline / online / whitelisted / banned / version mismatch)
+	// without giving the server enough wall-clock time to fully
+	// process us as a player. Note: this is best-effort — the server
+	// may still broadcast "X joined the game" if it processes the
+	// Login Start before it observes our FIN.
+	StealthDetect StealthMode = "detect"
+
+	// StealthIntrusive closes the connection only after the
+	// configured timeout elapses, deliberately letting the server
+	// finish processing the Login Start. Use this when you want to
+	// stress a server's join pipeline (or trigger the broadcast you
+	// do not want in detect).
+	StealthIntrusive StealthMode = "intrusive"
+)
+
+// DefaultStealthMode is the mode used when --login-mode is not
+// supplied. Detect is the closest to a "probe but don't actually
+// join" behaviour.
+const DefaultStealthMode = StealthDetect
+
+// ParseStealthMode normalises a CLI value to a StealthMode. The
+// empty string maps to DefaultStealthMode so that absence-of-flag
+// behaves like the legacy --login=true default.
+func ParseStealthMode(s string) (StealthMode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return DefaultStealthMode, nil
+	case "off":
+		return StealthOff, nil
+	case "detect":
+		return StealthDetect, nil
+	case "intrusive":
+		return StealthIntrusive, nil
+	}
+	return "", fmt.Errorf("invalid login mode %q (want off|detect|intrusive)", s)
+}
+
+func (m StealthMode) Valid() bool {
+	switch m {
+	case StealthOff, StealthDetect, StealthIntrusive:
+		return true
+	}
+	return false
+}
+
+func (m StealthMode) String() string {
+	if m == "" {
+		return string(DefaultStealthMode)
+	}
+	return string(m)
+}
 
 var (
 	ErrConnectionFailed = fmt.Errorf("login: connection failed")
 	ErrTimeout          = fmt.Errorf("login: timeout")
 	ErrMalformedPacket  = fmt.Errorf("login: malformed packet")
+	// ErrLoginSkipped is returned by Handshake when mode == off.
+	// Callers should treat it as "no info, not an error".
+	ErrLoginSkipped = errors.New("login: skipped (mode=off)")
 )
 
 // Handshake performs a Minecraft login handshake against the target
@@ -50,8 +132,30 @@ var (
 // kicks in when the disconnect suggests a different protocol version
 // (e.g. "Please use version 1.21.11"); whitelist/ban/empty reasons do
 // not trigger a retry.
-func Handshake(ctx context.Context, host string, port uint16, timeout time.Duration, username string, protoVersion int32, logger *slog.Logger) (*LoginResult, error) {
-	result, err := doHandshakeOnce(ctx, host, port, timeout, username, protoVersion, logger)
+//
+// The mode argument controls how aggressive the probe is:
+//
+//   - StealthOff: no handshake at all; returns (nil, ErrLoginSkipped).
+//   - StealthDetect: send the Login Start packet and tear down the
+//     connection as soon as the first reply arrives (or after a short
+//     deadline). Best-effort stealth: the server may still broadcast
+//     "X joined the game" if it processes Login Start before observing
+//     our FIN.
+//   - StealthIntrusive: same as Detect but with a long deadline, so
+//     the server has time to fully process the Login Start. Use this
+//     to stress the server's join pipeline. (The legacy --login=true
+//     flag maps to this mode.)
+//
+// An empty mode is treated as DefaultStealthMode (detect).
+func Handshake(ctx context.Context, host string, port uint16, timeout time.Duration, username string, protoVersion int32, mode StealthMode, logger *slog.Logger) (*LoginResult, error) {
+	if mode == "" {
+		mode = DefaultStealthMode
+	}
+	if mode == StealthOff {
+		return nil, ErrLoginSkipped
+	}
+
+	result, err := doHandshakeOnce(ctx, host, port, timeout, username, protoVersion, mode, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +171,7 @@ func Handshake(ctx context.Context, host string, port uint16, timeout time.Durat
 						"new_proto", hintProto,
 					)
 				}
-				if retried, err := doHandshakeOnce(ctx, host, port, timeout, username, hintProto, logger); err == nil {
+				if retried, err := doHandshakeOnce(ctx, host, port, timeout, username, hintProto, mode, logger); err == nil {
 					result = retried
 				}
 			}
@@ -78,8 +182,10 @@ func Handshake(ctx context.Context, host string, port uint16, timeout time.Durat
 
 // doHandshakeOnce performs a single login handshake attempt without
 // retry logic. Used by Handshake to avoid duplicating the dial/send/
-// read code.
-func doHandshakeOnce(ctx context.Context, host string, port uint16, timeout time.Duration, username string, protoVersion int32, logger *slog.Logger) (*LoginResult, error) {
+// read code. mode controls the read deadline: detect clamps it to
+// detectReadDeadline (biased towards tearing down before the server
+// finishes processing); intrusive uses the full timeout.
+func doHandshakeOnce(ctx context.Context, host string, port uint16, timeout time.Duration, username string, protoVersion int32, mode StealthMode, logger *slog.Logger) (*LoginResult, error) {
 	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
 
 	dialer := &net.Dialer{Timeout: timeout}
@@ -92,7 +198,22 @@ func doHandshakeOnce(ctx context.Context, host string, port uint16, timeout time
 	}
 	defer conn.Close()
 
-	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+	readDeadline := timeout
+	switch mode {
+	case StealthDetect:
+		if readDeadline > detectReadDeadline {
+			readDeadline = detectReadDeadline
+		}
+	case StealthIntrusive:
+		// Use the caller-supplied timeout; if they passed a tiny
+		// value, fall back to a sane floor so the server has time
+		// to actually process.
+		if readDeadline < intrusiveReadDeadline {
+			readDeadline = intrusiveReadDeadline
+		}
+	}
+
+	if err := conn.SetDeadline(time.Now().Add(readDeadline)); err != nil {
 		return nil, fmt.Errorf("login: setting deadline: %w", err)
 	}
 
@@ -124,6 +245,7 @@ func doHandshakeOnce(ctx context.Context, host string, port uint16, timeout time
 		logger.Debug("login result",
 			"addr", addr,
 			"mode", string(result.Mode),
+			"mode_requested", string(mode),
 			"disconnect_reason", result.DisconnectReason,
 		)
 	}

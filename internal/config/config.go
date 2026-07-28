@@ -37,7 +37,8 @@ type Config struct {
 	ProbeQPS     int           `mapstructure:"probe_qps"`
 	ProbeWorkers int           `mapstructure:"probe_workers"`
 	ProbeTimeout time.Duration `mapstructure:"probe_timeout"`
-	ProbeLogin   bool         `mapstructure:"probe_login"`
+	ProbeLogin   bool          `mapstructure:"probe_login"`
+	ProbeLoginMode string       `mapstructure:"probe_login_mode"`
 
 	// Update settings
 	UpdateQPS     int           `mapstructure:"update_qps"`
@@ -45,6 +46,7 @@ type Config struct {
 	UpdateTimeout time.Duration `mapstructure:"update_timeout"`
 	UpdateLimit   int           `mapstructure:"update_limit"`
 	UpdateLogin   bool         `mapstructure:"update_login"`
+	UpdateLoginMode string       `mapstructure:"update_login_mode"`
 
 	// List settings
 	ListSort      string   `mapstructure:"list_sort"`
@@ -91,17 +93,19 @@ const (
 	DefaultPorts = "25500-25700"
 
 	// Probe
-	DefaultProbeQPS     = 100
-	DefaultProbeWorkers = 128
-	DefaultProbeTimeout = 1 * time.Second
-	DefaultProbeLogin   = true
+	DefaultProbeQPS      = 100
+	DefaultProbeWorkers  = 128
+	DefaultProbeTimeout  = 1 * time.Second
+	DefaultProbeLogin    = true
+	DefaultProbeLoginMode = "detect"
 
 	// Update
-	DefaultUpdateQPS     = 100
-	DefaultUpdateWorkers = 128
-	DefaultUpdateTimeout = 1 * time.Second
-	DefaultUpdateLimit   = 0
-	DefaultUpdateLogin   = true
+	DefaultUpdateQPS      = 100
+	DefaultUpdateWorkers  = 128
+	DefaultUpdateTimeout  = 1 * time.Second
+	DefaultUpdateLimit    = 0
+	DefaultUpdateLogin    = true
+	DefaultUpdateLoginMode = "detect"
 
 	// List
 	DefaultListSort      = "recent"
@@ -174,6 +178,8 @@ var (
 	defaultLoginUser              = DefaultLoginUser
 	defaultProbeLogin            = DefaultProbeLogin
 	defaultUpdateLogin          = DefaultUpdateLogin
+	defaultProbeLoginMode        = DefaultProbeLoginMode
+	defaultUpdateLoginMode       = DefaultUpdateLoginMode
 	defaultASCII                  = DefaultASCII
 	defaultResume                = DefaultResume
 	defaultDebugLogin            = DefaultDebugLogin
@@ -311,6 +317,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("probe_workers", defaultProbeWorkers)
 	v.SetDefault("probe_timeout", defaultProbeTimeout)
 	v.SetDefault("probe_login", defaultProbeLogin)
+	v.SetDefault("probe_login_mode", defaultProbeLoginMode)
 
 	// Update
 	v.SetDefault("update_qps", defaultUpdateQPS)
@@ -318,6 +325,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("update_timeout", defaultUpdateTimeout)
 	v.SetDefault("update_limit", defaultUpdateLimit)
 	v.SetDefault("update_login", defaultUpdateLogin)
+	v.SetDefault("update_login_mode", defaultUpdateLoginMode)
 
 	// List
 	v.SetDefault("list_sort", defaultListSort)
