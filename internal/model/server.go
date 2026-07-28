@@ -53,6 +53,7 @@ type Server struct {
 	RawQuery        string         `json:"raw_query,omitempty"`
 	ProbeKind       string         `json:"probe_kind,omitempty"`
 	LoginMode       string         `json:"login_mode,omitempty"`
+	LastLogin       string         `json:"last_login,omitempty"`
 }
 
 // Address returns "ip:port".

@@ -7,7 +7,7 @@ import (
 
 // currentSchemaVersion is the latest schema version. Bump on every
 // backward-incompatible change and add a new entry to migrations.
-const currentSchemaVersion = 4
+const currentSchemaVersion = 6
 
 type migration struct {
 	version int
@@ -22,6 +22,8 @@ var migrations = []migration{
 	{version: 2, sql: schemaV2},
 	{version: 3, sql: schemaV3},
 	{version: 4, sql: schemaV4},
+	{version: 5, sql: schemaV5},
+	{version: 6, sql: schemaV6},
 }
 
 const schemaV1 = `
@@ -77,6 +79,27 @@ ALTER TABLE servers ADD COLUMN gametype  TEXT;
 
 const schemaV4 = `
 ALTER TABLE servers ADD COLUMN login_mode TEXT;
+`
+
+const schemaV5 = `
+CREATE TABLE IF NOT EXISTS player_visits (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  ip           TEXT    NOT NULL,
+  port         INTEGER NOT NULL,
+  player_name  TEXT    NOT NULL,
+  player_id    TEXT    NOT NULL,
+  first_seen   TIMESTAMP NOT NULL,
+  last_seen    TIMESTAMP NOT NULL,
+  UNIQUE(ip, port, player_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_visits_lookup ON player_visits(ip, port);
+CREATE INDEX IF NOT EXISTS idx_player_visits_player ON player_visits(player_name, player_id);
+CREATE INDEX IF NOT EXISTS idx_player_visits_last_seen ON player_visits(last_seen DESC);
+`
+
+const schemaV6 = `
+ALTER TABLE servers ADD COLUMN last_login TEXT;
 `
 
 // EnsureSchema applies any pending migrations. Safe to call on every

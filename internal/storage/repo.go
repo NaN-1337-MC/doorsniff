@@ -77,12 +77,13 @@ INSERT INTO servers (
   version_protocol, version_name, motd,
   num_players, max_players, sample_players,
   query_enabled, plugins, map, gametype, country, raw_query, probe_kind,
-  login_mode
+  login_mode, last_login
 ) VALUES (
   ?, ?, ?, ?, ?,
   ?, ?, ?,
   ?, ?, ?,
-  ?, ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?,
+  ?, ?
 )
 ON CONFLICT (ip, port) DO UPDATE SET
   last_seen       = excluded.last_seen,
@@ -100,7 +101,8 @@ ON CONFLICT (ip, port) DO UPDATE SET
   country         = excluded.country,
   raw_query       = excluded.raw_query,
   probe_kind      = excluded.probe_kind,
-  login_mode      = excluded.login_mode;
+  login_mode      = excluded.login_mode,
+  last_login      = excluded.last_login;
 `
 
 	_, err = r.db.conn.ExecContext(ctx, q,
@@ -123,6 +125,7 @@ ON CONFLICT (ip, port) DO UPDATE SET
 		nullableString(s.RawQuery),
 		nullableString(s.ProbeKind),
 		nullableString(s.LoginMode),
+		nullableString(s.LastLogin),
 	)
 	if err != nil {
 		return fmt.Errorf("upserting server %s: %w", s.Address(), err)
@@ -179,7 +182,7 @@ SELECT ip, port, first_seen, last_seen, last_latency_ms,
        version_protocol, version_name, motd,
        num_players, max_players, sample_players,
        query_enabled, plugins, map, gametype, country, raw_query, probe_kind,
-       login_mode
+       login_mode, last_login
 FROM servers%s
 ORDER BY %s
 LIMIT ? OFFSET ?;
@@ -234,6 +237,7 @@ type ListQuery struct {
 	Plugin      []string  // plugin name substrings (OR'd, searches in plugins JSON)
 	Protocol    *int      // version_protocol exact match
 	Address     string    // IP address substring
+	LastLogin   string    // last_login exact match (disconnect, unknown, full, kicked, banned)
 }
 
 // ListServersFiltered executes a flexible query built from ListQuery.
@@ -357,6 +361,12 @@ func (r *Repository) ListServersFiltered(ctx context.Context, q ListQuery) ([]mo
 		args = append(args, "%"+q.Address+"%")
 	}
 
+	// Last login filter (exact match).
+	if q.LastLogin != "" {
+		conds = append(conds, "last_login = ?")
+		args = append(args, q.LastLogin)
+	}
+
 	where := ""
 	if len(conds) > 0 {
 		where = " WHERE " + strings.Join(conds, " AND ")
@@ -367,7 +377,7 @@ SELECT ip, port, first_seen, last_seen, last_latency_ms,
        version_protocol, version_name, motd,
        num_players, max_players, sample_players,
        query_enabled, plugins, map, gametype, country, raw_query, probe_kind,
-       login_mode
+       login_mode, last_login
 FROM servers%s
 ORDER BY %s
 LIMIT ?;
@@ -508,6 +518,7 @@ func scanServer(rs rowScanner) (model.Server, error) {
 		rawQuery   sql.NullString
 		probeKind  sql.NullString
 		loginMode  sql.NullString
+		lastLogin  sql.NullString
 		latency    sql.NullInt64
 		firstSeen  time.Time
 		lastSeen   time.Time
@@ -532,6 +543,7 @@ func scanServer(rs rowScanner) (model.Server, error) {
 		&rawQuery,
 		&probeKind,
 		&loginMode,
+		&lastLogin,
 	); err != nil {
 		return s, err
 	}
@@ -574,6 +586,7 @@ func scanServer(rs rowScanner) (model.Server, error) {
 	s.RawQuery = rawQuery.String
 	s.ProbeKind = probeKind.String
 	s.LoginMode = loginMode.String
+	s.LastLogin = lastLogin.String
 	return s, nil
 }
 

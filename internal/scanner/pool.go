@@ -396,7 +396,12 @@ func (wk *worker) processTarget(ctx context.Context, t model.Target) {
 				slog.Debug("login probe failed", "ip", t.IP, "port", t.Port, "err", lerr)
 			}
 			if loginres != nil {
-				s.LoginMode = loginres.Mode.String()
+				modeStr := loginres.Mode.String()
+				if loginres.Mode.IsPersistent() {
+					s.LoginMode = modeStr
+				} else {
+					s.LastLogin = modeStr
+				}
 				select {
 				case wk.results <- s:
 				case <-ctx.Done():
