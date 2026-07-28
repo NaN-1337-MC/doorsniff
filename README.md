@@ -2,125 +2,176 @@
 
 > Minecraft server scanner written in Go.
 
-`doorsniff` reads a list of seed IPs (or CIDR ranges), scans a
-configurable port range, checks each open port for a Minecraft
-server (modern Server List Ping, with a 1.6 fallback for
-BungeeCord-style proxies), persists the results to a local SQLite
-database, and prints each finding live to a styled terminal.
+`doorsniff` takes a list of seed hosts (IPs, CIDR ranges, or
+hostnames), scans a configurable port range against each one, and
+checks every open port for a Minecraft server. Findings are saved to
+a local SQLite database and printed live to the terminal as the scan
+runs.
 
-## Status
-
-**Phases 0-9 complete.** `probe`, `list`, `update`, and `init` are
-stable. `tui` and `seed` are reserved but not yet implemented.
-Resume, per-IP progress bar, CIDR expansion, and login mode detection
-all work. See [docs/plan.md](docs/plan.md) for the roadmap.
-
-## Features
-
-- Subcommand CLI: `doorsniff probe`, `doorsniff list`, `doorsniff update`,
-  `doorsniff init`
-- Configurable port range (default `1-65535`)
-- TCP connect probe with rate limit (default 200 QPS, 256 workers)
-- Server List Ping (modern 1.7+) with JSON response
-- Legacy SLP (1.6) as a fallback when the modern handshake is RST'd
-  by a proxy
-- Login handshake to detect online/offline mode, whitelist, bans
-- CIDR expansion in seed files (`69.9.176.0/20` becomes 4096 seeds)
-- Local SQLite storage (pure-Go driver, no CGO)
-- Live terminal output, lipgloss styled
-- Two-line sticky progress bar: per-IP + overall
-- Resume support: `--resume` skips seeds that were fully scanned
-  in a previous run
-- Nine filters on `doorsniff list` (version, engine, players, maxplayers,
-  port, MOTD, login mode, sort, limit)
-- ASCII mode for plain terminals (`--ascii`)
-- XDG-compliant config and database paths
-- Cross-platform (Linux, macOS, Windows) — single static binary
+This is a learning project: the goal is to get hands-on with Go's
+concurrency, the Minecraft wire protocols (SLP, legacy SLP, Login,
+Query), and the Charm TUI stack on a real codebase.
 
 ## Quick start
 
 ```bash
+# 1. Build
 go build -o doorsniff ./cmd/doorsniff
-./doorsniff probe --file ./seed.txt
+
+# 2. Initialize config and database (~/.config/doorsniff,
+#    ~/.local/share/doorsniff)
+./doorsniff init
+
+# 3. Drop a host into the seeds directory
+echo "mc.hypixel.net" > ~/.config/doorsniff/seeds/minecraft.txt
+
+# 4. Run a scan
+./doorsniff probe --file ~/.config/doorsniff/seeds/minecraft.txt \
+                  --ports 25565 --qps 50
+
+# 5. List what was found
 ./doorsniff list
 ```
 
 A fuller walkthrough lives in [docs/quickstart.md](docs/quickstart.md).
 
-## `doorsniff probe`
+## How it works
 
-| Flag | Default | Purpose |
-|---|---|---|
-| `--ports RANGE` | `1-65535` | Port range |
-| `--qps N` | `200` | Global QPS limit |
-| `--workers N` | `256` | Worker pool size |
-| `--timeout DUR` | `1s` | Per-probe timeout |
-| `--file PATH` | — | Read seeds from a single file |
-| `--seeds DIR` | XDG default | Override seeds directory |
-| `--database PATH` | XDG default | Override database path |
-| `--resume` | `false` | Skip seeds fully scanned in a previous run |
-| `--verbose`, `-v` | `false` | Per-target error lines + debug logging |
-| `--ascii` | `false` | Plain output (no colour, ASCII bar) |
+```
+   seeds/*.txt                      chan Target
+        │                          (seed × port)
+        ▼                               │
+  ┌──────────────┐                      ▼
+  │ seed loader  │            ┌──────────────────────┐
+  │  + CIDR      │            │  worker pool         │
+  │  expansion   │            │  (errgroup, N=256)   │
+  └──────────────┘            │  + rate.Limiter      │
+                              │                      │
+                              │  TCP connect ──┐     │
+                              │     │          │     │
+                              │     ▼          │     │
+                              │   SLP ping     │     │
+                              │     │ RST →    │     │
+                              │     ▼          │     │
+                              │  legacy SLP    │     │
+                              │     │          │     │
+                              │     ▼          │     │
+                              │  chan Result   │     │
+                              └────────┬───────┘     │
+                                       ▼             │
+                              ┌──────────────────────┐
+                              │  SQLite writer       │
+                              │  + stdout (lipgloss) │
+                              └──────────────────────┘
+```
 
-`Ctrl+C` stops the scan. Use `--resume` to continue from the last
-checkpoint.
+For each open TCP port, doorsniff tries the modern Server List Ping
+(1.7+); if the server resets the modern handshake — a BungeeCord /
+Velocity proxy with `ping_passthrough` disabled — it falls back to
+the legacy 1.6 SLP. Servers that respond are persisted to SQLite and
+printed to the terminal with version, player count, latency, and MOTD.
 
-## `doorsniff list`
+## Subcommands
 
-| Flag | Default | Purpose |
-|---|---|---|
-| `--version VER` | — | Comma-separated version substrings, OR'd |
-| `--engine ENG` | — | Engine substring, case-insensitive |
-| `--players EXPR` | — | Player predicate (`>1`, `<50`, `1-10`, `=5`) |
-| `--maxplayers EXPR` | — | Max players predicate (`>=100`, `50-200`, `<500`) |
-| `--port PORT` | — | Port or port range |
-| `--motd TEXT` | — | MOTD substring search |
-| `--login MODE` | — | Login mode filter (`cracked`, `premium`, `whitelist`, `banned`, `kicked`, `full`) |
-| `--sort KEY` | `recent` | Sort: `players`, `latency`, `version`, `port`, `recent`, `oldest`, `login` |
-| `--limit N` | `50` | Max results |
-| `--database PATH` | XDG default | Override database path |
+| Command | What it does |
+|---|---|
+| `doorsniff probe` | Run a scan against the seeds directory or a file |
+| `doorsniff list` | Query the database of found servers |
+| `doorsniff update` | Re-probe known servers to refresh their data |
+| `doorsniff init` | Create config file and database with defaults |
+| `doorsniff version` | Print the version string |
 
-## `doorsniff update`
+Run `doorsniff help <command>` for the full flag list, or see
+[docs/quickstart.md](docs/quickstart.md).
 
-Re-probes known servers to refresh their data. Supports the same
-filter flags as `list` to select which servers to update.
+## Features
 
-| Flag | Default | Purpose |
-|---|---|---|
-| `--qps N` | `200` | Global QPS limit |
-| `--workers N` | `64` | Worker pool size |
-| `--limit N` | `0` | Max servers to update (0 = all) |
-| `--login` | `false` | Perform login handshake to detect online/offline mode |
-| `--login-user NAME` | `Herobrine` | Username for login handshake |
-| `--debug-login` | `false` | Dump raw login packets to stderr |
-| `--ascii` | `false` | Plain output (no colour, ASCII bar) |
-| `--database PATH` | XDG default | Override database path |
+- **TCP port scan** with rate-limited worker pool (default 200 QPS,
+  256 workers, 1 s per-probe timeout).
+- **Modern SLP** (1.7+) with full JSON response parsing — version,
+  description, players, sample player list, latency.
+- **Legacy SLP fallback** (1.6) when a proxy resets the modern
+  handshake.
+- **Login handshake** to detect online / offline (cracked) /
+  whitelisted / banned / full servers.
+- **Query protocol** (UDP, full stat) — driver and parser are in
+  place; `model.Server` carries `map` and `gametype` columns.
+- **CIDR expansion**: `69.9.176.0/20` in a seed file becomes 4096
+  individual seeds, each scanned independently.
+- **Resume support**: `--resume` skips seeds that were fully scanned
+  in a previous run; an interrupted seed restarts from
+  `last_port + 1`.
+- **Lipgloss + termenv** sticky two-line progress bar (per-IP +
+  overall), styled result cards, and `--ascii` for plain terminals.
+- **XDG paths**: config, seeds, and database under
+  `$XDG_CONFIG_HOME/doorsniff/` and `$XDG_DATA_HOME/doorsniff/`.
+- **Pure-Go SQLite** (`modernc.org/sqlite`), no CGO toolchain
+  required.
+- **Single static binary** that runs on Linux, macOS, and Windows.
+
+## Configuration
+
+Doorsniff reads three layers, in order of precedence:
+
+1. CLI flags (`--ports`, `--qps`, `--workers`, …)
+2. Environment variables (`SWOOMPS_QPS`, `SWOOMPS_WORKERS`, …)
+3. Config file (`~/.config/doorsniff/config.yaml`)
+
+The config file is created by `doorsniff init` with documented
+defaults. Run `doorsniff help probe` (or `list`, or `update`) for the
+full list of flags and their defaults.
+
+## Use responsibly
+
+Doorsniff speaks the same protocols the official Minecraft client
+uses to populate the multiplayer server list. It is **not** an
+exploitation or denial-of-service tool, but it still sends real
+traffic to real hosts. Before running it:
+
+1. **Stay below the noise floor.** The default rate limit is 200 QPS.
+   Lower it with `--qps` when in doubt.
+2. **Don't scan random IPv4 ranges.** The scanner only probes IPs
+   you put in your seed files. CIDR expansion is opt-in and you
+   control its size.
+3. **Respect local law and the target's terms of service.** Some
+   jurisdictions and hosting providers explicitly prohibit
+   unsolicited scanning.
+4. **Don't publish harvested lists.** The database is local.
+5. **There is no auth, no brute force, no RCON, no exfiltration.**
+   If a server wants to be excluded from your scans, edit your
+   seed files.
+
+For the full ethical position, see [docs/ethics.md](docs/ethics.md).
 
 ## Documentation
 
-Long-form docs live in [docs/](docs/README.md):
+Long-form docs live under [docs/](docs/README.md):
 
-- [plan.md](docs/plan.md) — roadmap and phases
-- [architecture.md](docs/architecture.md) — stack, decisions, module layout, known tech debt
-- [protocols.md](docs/protocols.md) — modern SLP and legacy 1.6 fallback
-- [storage.md](docs/storage.md) — SQLite schema, migrations, repository
-- [quickstart.md](docs/quickstart.md) — build, run, subcommand examples
-- [ethics.md](docs/ethics.md) — legal and ethical considerations
+| File | What's in it |
+|---|---|
+| [docs/quickstart.md](docs/quickstart.md) | Build, run, subcommand examples, env vars, troubleshooting |
+| [docs/architecture.md](docs/architecture.md) | Stack, module layout, data flow, concurrency model, decisions |
+| [docs/protocols.md](docs/protocols.md) | Modern SLP and legacy 1.6 fallback in detail |
+| [docs/storage.md](docs/storage.md) | SQLite schema, migrations, repository queries |
+| [docs/plan.md](docs/plan.md) | Roadmap and per-phase status |
+| [docs/ethics.md](docs/ethics.md) | Legal and ethical considerations, opt-out status |
+| [docs/lessons.md](docs/lessons.md) | Design and technical lessons from the refactor |
 
 ## Development
 
 ```bash
 go build ./...            # compile
 go test ./...             # run tests
-go test -race ./...       # with race detector
+go test -race ./...       # with the race detector
 go vet ./...              # static analysis
 go mod tidy               # clean module graph
 ```
 
-## Planned
+Requires Go 1.26+. No CGO.
 
-- TUI dashboard behind `doorsniff tui` (Bubbletea)
-- Query protocol (UDP) — basic and full stat
+## Roadmap
+
+- `doorsniff tui` — a Bubbletea dashboard over the live scan
 - GeoIP enrichment of found servers
 - JSON / CSV export from `doorsniff list`
 - Per-host blacklist file
