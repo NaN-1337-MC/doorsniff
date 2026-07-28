@@ -88,7 +88,8 @@ update_login: true
 
 # List settings
 # Available columns: ordinal, address, version, login, players, latency,
-#                   last_seen, motd, map, country, plugins, protocol, player_names
+#                   last_seen, last_activity, motd, map, country, plugins,
+#                   protocol, player_names, last_login
 list_sort: "recent"
 list_limit: 100
 list_columns:
@@ -106,6 +107,11 @@ list_columns:
 # 02/01/2006 = DD/MM/YYYY, 01/02/2006 = MM/DD/YYYY, 2006-01-02 = YYYY-MM-DD
 # Add time: "02/01/2006 15:04:05" = DD/MM/YYYY HH:mm:ss
 list_date_format: "02/01/2006 15:04:05"
+
+# Max players shown in 'list server <ip>' PLAYERS column.
+# 0 = no truncation (table wraps to multiple lines). Set to e.g. 5 to
+# show the first 5 players followed by "+N more".
+list_server_player_max: 0
 
 # Scanner settings
 scanner_result_channel_size: 256

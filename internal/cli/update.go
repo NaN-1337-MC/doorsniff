@@ -227,9 +227,13 @@ func runUpdate(args []string) error {
 				return nil
 			}
 
+			now := time.Now().UTC()
+			if playerHistoryFlag {
+				_ = repo.RecordServerScan(gctx, s.IP, s.Port, true, now)
+			}
+
 			// Record player events if player history is enabled.
 			if playerHistoryFlag && len(s.SamplePlayers) > 0 {
-				now := time.Now().UTC()
 				for _, p := range s.SamplePlayers {
 					if p.Name == "" {
 						continue
@@ -793,8 +797,8 @@ func isConnReset(err error) bool {
 
 func updateUsage() string {
 	var b strings.Builder
-	b.WriteString("doorsniff update — re-probe known servers to refresh their data\n\n")
-	b.WriteString("Usage:\n  doorsniff update [flags]\n\n")
+	b.WriteString("doorsniff re-probe — re-probe known servers to refresh their data\n\n")
+	b.WriteString("Usage:\n  doorsniff re-probe [flags]\n\n")
 	b.WriteString("Flags:\n")
 	b.WriteString("  --version VER    filter by version (e.g. 1.21.1,26.1.2)\n")
 	b.WriteString("  --engine ENG     filter by server engine, case-insensitive (e.g. paper, purpur)\n")
@@ -815,9 +819,9 @@ func updateUsage() string {
 	b.WriteString(fmt.Sprintf("  --playerhistory  record player visit history (default %t)\n", config.DefaultUpdatePlayerHistory))
 	b.WriteString("\nServers are updated oldest-first (by last_seen).\n")
 	b.WriteString("\nExamples:\n")
-	b.WriteString("  doorsniff update\n")
-	b.WriteString("  doorsniff update --version=1.21.1 --engine=paper\n")
-	b.WriteString("  doorsniff update --players='>0' --maxplayers='>=50'\n")
-	b.WriteString("  doorsniff update --login-mode=intrusive\n")
+	b.WriteString("  doorsniff re-probe\n")
+	b.WriteString("  doorsniff re-probe --version=1.21.1 --engine=paper\n")
+	b.WriteString("  doorsniff re-probe --players='>0' --maxplayers='>=50'\n")
+	b.WriteString("  doorsniff re-probe --login-mode=intrusive\n")
 	return b.String()
 }

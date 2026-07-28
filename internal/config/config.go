@@ -55,6 +55,10 @@ type Config struct {
 	ListLimit     int      `mapstructure:"list_limit"`
 	ListColumns   []string `mapstructure:"list_columns"`
 	ListDateFormat string  `mapstructure:"list_date_format"`
+	// ListServerPlayerMax controls truncation of the PLAYERS column in
+	// `doorsniff list server <ip>`. 0 means no truncation (the table wraps
+	// naturally; renderers handle long content).
+	ListServerPlayerMax int `mapstructure:"list_server_player_max"`
 
 	// Scanner settings
 	ScannerResultChannelSize int           `mapstructure:"scanner_result_channel_size"`
@@ -115,6 +119,8 @@ const (
 	DefaultListSort      = "recent"
 	DefaultListLimit     = 100
 	DefaultListDateFormat = "02/01/2006 15:04:05" // DD/MM/YYYY HH:mm:ss
+	// DefaultListServerPlayerMax = 0 (no truncation; rely on table wrapping).
+	DefaultListServerPlayerMax = 0
 
 	// DefaultListColumns is defined as a var to avoid slice literal in const error
 
@@ -165,6 +171,7 @@ var (
 	defaultListLimit              = DefaultListLimit
 	defaultListColumns            = DefaultListColumns
 	defaultListDateFormat        = DefaultListDateFormat
+	defaultListServerPlayerMax    = DefaultListServerPlayerMax
 	defaultScannerResultChannelSize = DefaultScannerResultChannelSize
 	defaultUpdateOpChannelSize     = DefaultUpdateOpChannelSize
 	defaultProgressTickerInterval   = DefaultProgressTickerInterval
@@ -340,6 +347,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("list_limit", defaultListLimit)
 	v.SetDefault("list_columns", defaultListColumns)
 	v.SetDefault("list_date_format", defaultListDateFormat)
+	v.SetDefault("list_server_player_max", defaultListServerPlayerMax)
 
 	// Scanner
 	v.SetDefault("scanner_result_channel_size", defaultScannerResultChannelSize)

@@ -11,7 +11,7 @@ The current CLI is subcommand-based:
 ```
 doorsniff probe                  # run a scan
 doorsniff list                   # query the database
-doorsniff update                 # re-probe known servers
+doorsniff re-probe                 # re-probe known servers
 doorsniff init                   # initialize config and database
 doorsniff version                # print version
 doorsniff help <sub>             # subcommand help

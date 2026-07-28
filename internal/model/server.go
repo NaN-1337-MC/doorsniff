@@ -38,6 +38,7 @@ type Server struct {
 	Port            uint16         `json:"port"`
 	FirstSeen       time.Time      `json:"first_seen"`
 	LastSeen        time.Time      `json:"last_seen"`
+	LastActivity    time.Time      `json:"last_activity,omitempty"`
 	LastLatencyMs   int64          `json:"last_latency_ms,omitempty"`
 	VersionProtocol int            `json:"version_protocol,omitempty"`
 	VersionName     string         `json:"version_name,omitempty"`
@@ -89,4 +90,22 @@ func (s Seed) Address() string {
 		port = 25565
 	}
 	return net.JoinHostPort(s.Host, strconv.Itoa(int(port)))
+}
+
+// PlayerEvent is one row from the player_events table.
+type PlayerEvent struct {
+	ServerIP   string
+	ServerPort uint16
+	PlayerName string
+	PlayerID   string
+	SeenAt     time.Time
+}
+
+// ServerScan is one row from the server_scans table.
+type ServerScan struct {
+	ID          int64
+	ServerIP    string
+	ServerPort  uint16
+	ScannedAt   time.Time
+	HadResponse bool
 }

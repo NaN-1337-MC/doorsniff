@@ -16,8 +16,16 @@ func Run(args []string) error {
 	case "probe":
 		return runProbe(rest)
 	case "list":
+		if len(rest) > 0 {
+			switch rest[0] {
+			case "server":
+				return runListServer(rest[1:])
+			case "player":
+				return runListPlayer(rest[1:])
+			}
+		}
 		return runList(rest)
-	case "update":
+	case "re-probe":
 		return runUpdate(rest)
 	case "init":
 		return runInit(rest)
@@ -73,7 +81,7 @@ Usage:
 Commands:
   probe               scan seeds from the configured directory or a file
   list                query and display found servers
-  update              re-probe known servers to refresh their data
+  re-probe            re-probe known servers to refresh their data
   init                initialize config and database
   version             print version
 
@@ -86,7 +94,7 @@ func helpCmd(cmd string) error {
 		fmt.Print(probeUsage())
 	case "list":
 		fmt.Print(listUsage())
-	case "update":
+	case "re-probe":
 		fmt.Print(updateUsage())
 	case "init":
 		fmt.Print(initUsage())

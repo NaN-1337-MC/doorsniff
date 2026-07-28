@@ -320,6 +320,7 @@ func (wk *worker) processTarget(ctx context.Context, t model.Target) {
 			}
 			wk.stats.Found.Add(1)
 			wk.printFound(s)
+			wk.recordServerScan(t.IP, t.Port, true, now)
 			return
 		}
 
@@ -364,6 +365,7 @@ func (wk *worker) processTarget(ctx context.Context, t model.Target) {
 	}
 	wk.stats.Found.Add(1)
 	wk.printFound(s)
+	wk.recordServerScan(t.IP, t.Port, true, now)
 
 	// Record player events for SLP sample players before Query
 	// enrichment can overwrite SamplePlayers.
@@ -459,6 +461,15 @@ func (wk *worker) recordPlayerEvents(ip string, port uint16, players []model.Sam
 		if err := wk.repo.RecordPlayerEvent(context.Background(), ip, port, p, seenAt); err != nil {
 			slog.Warn("recording player event", "ip", ip, "port", port, "player", p.Name, "err", err)
 		}
+	}
+}
+
+func (wk *worker) recordServerScan(ip string, port uint16, hadResponse bool, at time.Time) {
+	if !wk.playerHistory || wk.repo == nil {
+		return
+	}
+	if err := wk.repo.RecordServerScan(context.Background(), ip, port, hadResponse, at); err != nil {
+		slog.Warn("recording server scan", "ip", ip, "port", port, "err", err)
 	}
 }
 

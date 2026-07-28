@@ -260,6 +260,207 @@ func TestGetStats(t *testing.T) {
 	}
 }
 
+func TestListServersFiltered_LastActivity(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	oldTime := now.Add(-72 * time.Hour)
+	freshTime := now.Add(-2 * time.Hour)
+
+	// Server A: has only stale player events.
+	if err := repo.UpsertServer(ctx, model.Server{
+		IP: "1.1.1.1", Port: 25565, FirstSeen: oldTime, LastSeen: oldTime,
+	}); err != nil {
+		t.Fatalf("upsert 1: %v", err)
+	}
+	// Server B: has only fresh player events.
+	if err := repo.UpsertServer(ctx, model.Server{
+		IP: "2.2.2.2", Port: 25565, FirstSeen: oldTime, LastSeen: now,
+	}); err != nil {
+		t.Fatalf("upsert 2: %v", err)
+	}
+	// Server C: no player events at all.
+	if err := repo.UpsertServer(ctx, model.Server{
+		IP: "3.3.3.3", Port: 25565, FirstSeen: oldTime, LastSeen: now,
+	}); err != nil {
+		t.Fatalf("upsert 3: %v", err)
+	}
+
+	for _, p := range []struct {
+		ip   string
+		seen time.Time
+		name string
+	}{
+		{"1.1.1.1", oldTime, "OldPlayer"},
+		{"2.2.2.2", freshTime, "FreshPlayer"},
+	} {
+		if err := repo.RecordPlayerEvent(ctx, p.ip, 25565, model.SamplePlayer{Name: p.name}, p.seen); err != nil {
+			t.Fatalf("record event: %v", err)
+		}
+	}
+
+	got, err := repo.ListServersFiltered(ctx, ListQuery{OrderBy: "ip ASC"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+
+	// LastActivity must be set for A and B, zero for C.
+	for _, s := range got {
+		switch s.IP {
+		case "1.1.1.1":
+			if !s.LastActivity.Equal(oldTime) {
+				t.Errorf("1.1.1.1 LastActivity = %v, want %v", s.LastActivity, oldTime)
+			}
+		case "2.2.2.2":
+			if !s.LastActivity.Equal(freshTime) {
+				t.Errorf("2.2.2.2 LastActivity = %v, want %v", s.LastActivity, freshTime)
+			}
+		case "3.3.3.3":
+			if !s.LastActivity.IsZero() {
+				t.Errorf("3.3.3.3 LastActivity = %v, want zero", s.LastActivity)
+			}
+		}
+	}
+
+	// ActiveSince filter: only server B (recent player activity).
+	threshold := now.Add(-24 * time.Hour)
+	got2, err := repo.ListServersFiltered(ctx, ListQuery{
+		OrderBy:     "ip ASC",
+		ActiveSince: &threshold,
+	})
+	if err != nil {
+		t.Fatalf("list filtered: %v", err)
+	}
+	if len(got2) != 1 || got2[0].IP != "2.2.2.2" {
+		t.Errorf("ActiveSince filter returned %d rows, want only 2.2.2.2", len(got2))
+	}
+}
+
+func TestRecordServerScan(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	for i := 0; i < 3; i++ {
+		err := repo.RecordServerScan(ctx, "1.2.3.4", 25565, true, now.Add(time.Duration(i)*time.Hour))
+		if err != nil {
+			t.Fatalf("RecordServerScan: %v", err)
+		}
+	}
+
+	// Record a non-responsive scan
+	err := repo.RecordServerScan(ctx, "1.2.3.4", 25565, false, now.Add(4*time.Hour))
+	if err != nil {
+		t.Fatalf("RecordServerScan (non-responsive): %v", err)
+	}
+
+	scans, err := repo.ListServerScans(ctx, "1.2.3.4", 25565, ListServerScansOptions{})
+	if err != nil {
+		t.Fatalf("ListServerScans: %v", err)
+	}
+	if len(scans) != 4 {
+		t.Fatalf("len(scans) = %d, want 4", len(scans))
+	}
+	// Should be DESC by default (most recent first)
+	if !scans[0].ScannedAt.After(scans[1].ScannedAt) {
+		t.Errorf("scans not in DESC order")
+	}
+	// Most recent (first in DESC order) should be non-responsive (hour 4)
+	if scans[0].HadResponse {
+		t.Errorf("scans[0].HadResponse = true, want false (non-responsive was most recent)")
+	}
+	// Oldest (last) is hour 0 — inserted with hadResponse=true
+	if !scans[3].HadResponse {
+		t.Errorf("scans[3].HadResponse = false, want true (hour-0 was inserted as responsive)")
+	}
+}
+
+func TestListServerScans_FilterRange(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	for i := 0; i < 5; i++ {
+		_ = repo.RecordServerScan(ctx, "5.5.5.5", 25565, true, now.Add(time.Duration(i)*time.Hour))
+	}
+
+	since := now.Add(1 * time.Hour)
+	until := now.Add(3 * time.Hour)
+	scans, err := repo.ListServerScans(ctx, "5.5.5.5", 25565, ListServerScansOptions{Since: &since, Until: &until})
+	if err != nil {
+		t.Fatalf("ListServerScans: %v", err)
+	}
+	if len(scans) != 3 {
+		t.Fatalf("len(scans) = %d, want 3 (hours 1,2,3)", len(scans))
+	}
+}
+
+func TestListServerScans_LimitOffset(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	for i := 0; i < 10; i++ {
+		_ = repo.RecordServerScan(ctx, "6.6.6.6", 25565, true, now.Add(time.Duration(i)*time.Hour))
+	}
+
+	scans, err := repo.ListServerScans(ctx, "6.6.6.6", 25565, ListServerScansOptions{Limit: 3})
+	if err != nil {
+		t.Fatalf("ListServerScans limit: %v", err)
+	}
+	if len(scans) != 3 {
+		t.Fatalf("len(scans) = %d, want 3", len(scans))
+	}
+
+	// oldest order
+	scans, err = repo.ListServerScans(ctx, "6.6.6.6", 25565, ListServerScansOptions{Limit: 3, Order: "oldest"})
+	if err != nil {
+		t.Fatalf("ListServerScans oldest: %v", err)
+	}
+	if !scans[0].ScannedAt.Before(scans[1].ScannedAt) {
+		t.Errorf("scans not in ASC order")
+	}
+}
+
+func TestKnownPlayersForServer(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	_ = repo.RecordPlayerEvent(ctx, "7.7.7.7", 25565, model.SamplePlayer{Name: "Notch"}, now)
+	_ = repo.RecordPlayerEvent(ctx, "7.7.7.7", 25565, model.SamplePlayer{Name: "Herobrine"}, now.Add(time.Hour))
+	_ = repo.RecordPlayerEvent(ctx, "7.7.7.7", 25565, model.SamplePlayer{Name: "Notch"}, now.Add(2*time.Hour)) // duplicate
+
+	players, err := repo.KnownPlayersForServer(ctx, "7.7.7.7", 25565)
+	if err != nil {
+		t.Fatalf("KnownPlayersForServer: %v", err)
+	}
+	if len(players) != 2 {
+		t.Fatalf("len(players) = %d, want 2", len(players))
+	}
+	if players[0] != "Notch" {
+		t.Errorf("players[0] = %q, want Notch (most recent first)", players[0])
+	}
+}
+
 func TestEnsureSchemaIdempotent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

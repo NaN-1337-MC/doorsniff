@@ -398,6 +398,81 @@ func ParseSinceFilter(s string) (*time.Time, error) {
 	return nil, fmt.Errorf("invalid --since format %q (valid: 1h, 2d, unix timestamp, or ISO date)", s)
 }
 
+// ParseDurationFilter parses a strict duration flag value (e.g. "1h", "7d",
+// "30m"). Only duration strings are accepted — no timestamps or ISO dates.
+// Returns nil when s is empty.
+func ParseDurationFilter(s string) (*time.Time, error) {
+	if s == "" {
+		return nil, nil
+	}
+
+	if strings.HasSuffix(s, "h") || strings.HasSuffix(s, "m") || strings.HasSuffix(s, "s") {
+		d, err := time.ParseDuration(s)
+		if err == nil {
+			t := time.Now().Add(-d)
+			return &t, nil
+		}
+	}
+
+	if strings.HasSuffix(s, "d") {
+		daysStr := strings.TrimSuffix(s, "d")
+		days, err := strconv.Atoi(daysStr)
+		if err == nil {
+			d := time.Duration(days*24) * time.Hour
+			t := time.Now().Add(-d)
+			return &t, nil
+		}
+	}
+
+	return nil, fmt.Errorf("invalid duration %q (use e.g. 1h, 30m, 7d)", s)
+}
+
+// ParseUntilFilter is the same as ParseSinceFilter but for the until/天花板 bound.
+func ParseUntilFilter(s string) (*time.Time, error) {
+	if s == "" {
+		return nil, nil
+	}
+
+	if strings.HasSuffix(s, "h") || strings.HasSuffix(s, "m") {
+		d, err := time.ParseDuration(s)
+		if err == nil {
+			t := time.Now().Add(d)
+			return &t, nil
+		}
+	}
+
+	if strings.HasSuffix(s, "d") {
+		daysStr := strings.TrimSuffix(s, "d")
+		days, err := strconv.Atoi(daysStr)
+		if err == nil {
+			d := time.Duration(days*24) * time.Hour
+			t := time.Now().Add(d)
+			return &t, nil
+		}
+	}
+
+	if strings.TrimSpace(s) == strings.TrimLeft(strings.TrimSpace(s), "0123456789") && s != "" {
+		unix, err := strconv.ParseInt(s, 10, 64)
+		if err == nil {
+			t := time.Unix(unix, 0)
+			return &t, nil
+		}
+	}
+
+	for _, format := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	} {
+		t, err := time.Parse(format, s)
+		if err == nil {
+			return &t, nil
+		}
+	}
+
+	return nil, fmt.Errorf("invalid --until format %q (valid: 1h, 2d, unix timestamp, or ISO date)", s)
+}
+
 // ParsePlayerNames parses a comma-separated list of player name substrings.
 func ParsePlayerNames(s string) []string {
 	if s == "" {
@@ -453,4 +528,37 @@ func ParseProtocol(s string) (*int, error) {
 		return nil, fmt.Errorf("invalid protocol filter %q: not a number", s)
 	}
 	return &n, nil
+}
+
+// rearrangeFlagsFirst returns args with flag tokens (and their immediately
+// following non-flag values) moved to the front while preserving relative
+// order. This lets the Go flag.Parse() see every flag even when the user
+// writes a positional argument before the flags. Equality-flag tokens like
+// "--player=Notch" are kept together as one item.
+//
+// Example:
+//
+//	in:  ["1.2.3.4:25565", "--player", "Notch", "--since=7d"]
+//	out: ["--player", "Notch", "--since=7d", "1.2.3.4:25565"]
+func rearrangeFlagsFirst(args []string) []string {
+	isFlag := func(s string) bool { return strings.HasPrefix(s, "-") }
+	hasInlineValue := func(s string) bool { return strings.Contains(s, "=") }
+
+	out := make([]string, 0, len(args))
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !isFlag(a) {
+			positional = append(positional, a)
+			continue
+		}
+		out = append(out, a)
+		// If it's a flag without "=", take the next token as its value
+		// (provided it does not itself look like a flag).
+		if !hasInlineValue(a) && i+1 < len(args) && !isFlag(args[i+1]) {
+			out = append(out, args[i+1])
+			i++
+		}
+	}
+	return append(out, positional...)
 }

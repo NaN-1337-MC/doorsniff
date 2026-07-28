@@ -30,7 +30,7 @@ The CLI is subcommand-based. Every action is a subcommand of
 |---|---|
 | `doorsniff probe` | Run a scan against the seeds directory or a file |
 | `doorsniff list` | Query the database of found servers |
-| `doorsniff update` | Re-probe known servers to refresh their data |
+| `doorsniff re-probe` | Re-probe known servers to refresh their data |
 | `doorsniff init` | Initialize config and database |
 | `doorsniff tui` | Live dashboard (em breve) |
 | `doorsniff seed` | Manage seeds (em breve) |
@@ -165,7 +165,7 @@ doorsniff list --version 1.21.1 --port '25566-26000'
 doorsniff list --motd survival
 ```
 
-## `doorsniff update`
+## `doorsniff re-probe`
 
 Re-probes known servers to refresh their data. Selects servers from
 the database using the same filters as `list`, then re-dials each
@@ -193,20 +193,20 @@ one to get fresh player counts, MOTD, and version info.
 
 ```bash
 # Update all known servers.
-doorsniff update
+doorsniff re-probe
 
 # Update only Paper servers with players.
-doorsniff update --engine paper --players '>0'
+doorsniff re-probe --engine paper --players '>0'
 
 # Update with login handshake detection (default mode is `detect`).
-doorsniff update --login-mode=detect
+doorsniff re-probe --login-mode=detect
 
 # Or be explicit about aggressiveness:
-doorsniff update --login-mode=intrusive   # keep the connection open longer
-doorsniff update --login-mode=off        # SLP only, no handshake
+doorsniff re-probe --login-mode=intrusive   # keep the connection open longer
+doorsniff re-probe --login-mode=off        # SLP only, no handshake
 
 # Update max 100 servers on non-default ports.
-doorsniff update --port '25500-25600' --limit 100
+doorsniff re-probe --port '25500-25600' --limit 100
 ```
 
 ### Login modes (`--login-mode`)

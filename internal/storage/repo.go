@@ -246,6 +246,9 @@ type ListQuery struct {
 	LatencySQL  string    // raw SQL fragment for latency filter
 	LatencyArgs []any     // args for LatencySQL
 	Since       *time.Time // servers seen after this time
+	// ActiveSince filters by last_activity (max player_events.seen_at).
+	// NULL last_activity (no players ever seen) is treated as not-active.
+	ActiveSince *time.Time
 	Plugin      []string  // plugin name substrings (OR'd, searches in plugins JSON)
 	Protocol    *int      // version_protocol exact match
 	Address     string    // IP address substring
@@ -353,6 +356,15 @@ func (r *Repository) ListServersFiltered(ctx context.Context, q ListQuery) ([]mo
 		args = append(args, *q.Since)
 	}
 
+	// ActiveSince filter (last_activity >= timestamp). last_activity is the
+	// MAX(seen_at) from player_events for this server, computed in the
+	// SELECT below. Servers with no player events at all have NULL and are
+	// excluded by this filter.
+	if q.ActiveSince != nil {
+		conds = append(conds, "last_activity >= ?")
+		args = append(args, *q.ActiveSince)
+	}
+
 	// Plugin filter (searches in plugins JSON).
 	if len(q.Plugin) > 0 {
 		var parts []string
@@ -391,7 +403,11 @@ SELECT ip, port, first_seen, last_seen, last_latency_ms,
        version_protocol, version_name, motd,
        num_players, max_players, sample_players,
        query_enabled, plugins, map, gametype, country, raw_query, probe_kind,
-       login_mode, last_login
+       login_mode, last_login,
+       (SELECT strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ',
+                        substr(MAX(seen_at), 1, 19))
+          FROM player_events
+          WHERE server_ip = servers.ip AND server_port = servers.port) AS last_activity
 FROM servers%s
 ORDER BY %s
 `, where, q.OrderBy)
@@ -411,7 +427,7 @@ ORDER BY %s
 
 	var out []model.Server
 	for rows.Next() {
-		s, err := scanServer(rows)
+		s, err := scanServerWithActivity(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scanning server: %w", err)
 		}
@@ -565,6 +581,98 @@ func scanServer(rs rowScanner) (model.Server, error) {
 	); err != nil {
 		return s, err
 	}
+	return finalizeScan(s, ipRaw, portRaw, firstSeen, lastSeen, latency, versionPr, versionNm, motd, numPl, maxPl, sampleRaw, queryEna, pluginsRaw, mapName, gametype, country, rawQuery, probeKind, loginMode, lastLogin)
+}
+
+// scanServerWithActivity is like scanServer but also reads the optional
+// last_activity column produced by the LEFT-JOIN subquery in
+// ListServersFiltered.
+func scanServerWithActivity(rs rowScanner) (model.Server, error) {
+	var (
+		ipRaw        sql.NullString
+		portRaw      sql.NullInt64
+		s            model.Server
+		versionPr    sql.NullInt64
+		versionNm    sql.NullString
+		motd         sql.NullString
+		numPl        sql.NullInt64
+		maxPl        sql.NullInt64
+		sampleRaw    sql.NullString
+		queryEna     sql.NullBool
+		pluginsRaw   sql.NullString
+		mapName      sql.NullString
+		gametype     sql.NullString
+		country      sql.NullString
+		rawQuery     sql.NullString
+		probeKind    sql.NullString
+		loginMode    sql.NullString
+		lastLogin    sql.NullString
+		latency      sql.NullInt64
+		firstSeen    time.Time
+		lastSeen     time.Time
+		lastActivity sql.NullString
+	)
+	if err := rs.Scan(
+		&ipRaw,
+		&portRaw,
+		&firstSeen,
+		&lastSeen,
+		&latency,
+		&versionPr,
+		&versionNm,
+		&motd,
+		&numPl,
+		&maxPl,
+		&sampleRaw,
+		&queryEna,
+		&pluginsRaw,
+		&mapName,
+		&gametype,
+		&country,
+		&rawQuery,
+		&probeKind,
+		&loginMode,
+		&lastLogin,
+		&lastActivity,
+	); err != nil {
+		return s, err
+	}
+	s, err := finalizeScan(s, ipRaw, portRaw, firstSeen, lastSeen, latency, versionPr, versionNm, motd, numPl, maxPl, sampleRaw, queryEna, pluginsRaw, mapName, gametype, country, rawQuery, probeKind, loginMode, lastLogin)
+	if err != nil {
+		return s, err
+	}
+	if lastActivity.Valid && lastActivity.String != "" {
+		// The query uses SQLite strftime() to normalise the value to
+		// RFC3339, so the parser only has to accept that one form.
+		if t, err := time.Parse(time.RFC3339, lastActivity.String); err == nil {
+			s.LastActivity = t
+		}
+	}
+	return s, nil
+}
+
+func finalizeScan(
+	s model.Server,
+	ipRaw sql.NullString,
+	portRaw sql.NullInt64,
+	firstSeen, lastSeen time.Time,
+	latency sql.NullInt64,
+	versionPr sql.NullInt64,
+	versionNm sql.NullString,
+	motd sql.NullString,
+	numPl sql.NullInt64,
+	maxPl sql.NullInt64,
+	sampleRaw sql.NullString,
+	queryEna sql.NullBool,
+	pluginsRaw sql.NullString,
+	mapName sql.NullString,
+	gametype sql.NullString,
+	country sql.NullString,
+	rawQuery sql.NullString,
+	probeKind sql.NullString,
+	loginMode sql.NullString,
+	lastLogin sql.NullString,
+) (model.Server, error) {
 	if !ipRaw.Valid || ipRaw.String == "" {
 		return s, fmt.Errorf("corrupted row: ip is NULL or empty (data integrity violation)")
 	}
@@ -690,6 +798,188 @@ func (r *Repository) RecordPlayerEvent(ctx context.Context, ip string, port uint
 		return fmt.Errorf("recording player event: %w", err)
 	}
 	return nil
+}
+
+// RecordServerScan inserts a scan record for a server.
+// hadResponse indicates whether the server responded with any data
+// (SLP, legacy ping, or Query — as opposed to TCP timeout/RST).
+func (r *Repository) RecordServerScan(ctx context.Context, ip string, port uint16, hadResponse bool, at time.Time) error {
+	const q = `
+	INSERT INTO server_scans (server_ip, server_port, scanned_at, had_response)
+	VALUES (?, ?, ?, ?)
+	`
+	hadResp := 0
+	if hadResponse {
+		hadResp = 1
+	}
+	if _, err := r.db.conn.ExecContext(ctx, q, ip, port, at, hadResp); err != nil {
+		return fmt.Errorf("recording server scan: %w", err)
+	}
+	return nil
+}
+
+// ListServerScansOptions filters server_scans queries.
+type ListServerScansOptions struct {
+	Since  *time.Time
+	Until  *time.Time
+	Limit  int
+	Order  string // "recent" (default) | "oldest"
+}
+
+// ListServerScans returns all scan records for a specific server.
+func (r *Repository) ListServerScans(ctx context.Context, ip string, port uint16, opts ListServerScansOptions) ([]model.ServerScan, error) {
+	q := "SELECT id, server_ip, server_port, scanned_at, had_response FROM server_scans WHERE server_ip = ? AND server_port = ?"
+	var args []any
+	args = append(args, ip, port)
+
+	if opts.Since != nil {
+		q += " AND scanned_at >= ?"
+		args = append(args, *opts.Since)
+	}
+	if opts.Until != nil {
+		q += " AND scanned_at <= ?"
+		args = append(args, *opts.Until)
+	}
+
+	switch opts.Order {
+	case "oldest":
+		q += " ORDER BY scanned_at ASC"
+	default:
+		q += " ORDER BY scanned_at DESC"
+	}
+
+	if opts.Limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, opts.Limit)
+	}
+
+	rows, err := r.db.conn.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying server_scans: %w", err)
+	}
+	defer rows.Close()
+
+	var scans []model.ServerScan
+	for rows.Next() {
+		var s model.ServerScan
+		var hadResp int
+		if err := rows.Scan(&s.ID, &s.ServerIP, &s.ServerPort, &s.ScannedAt, &hadResp); err != nil {
+			return nil, fmt.Errorf("scanning server scan: %w", err)
+		}
+		s.HadResponse = hadResp == 1
+		scans = append(scans, s)
+	}
+	return scans, rows.Err()
+}
+
+// KnownPlayersForServer returns all distinct player names that have ever been
+// seen on this server (from player_events), ordered by most recent first.
+func (r *Repository) KnownPlayersForServer(ctx context.Context, ip string, port uint16) ([]string, error) {
+	const q = `
+	SELECT DISTINCT player_name
+	FROM player_events
+	WHERE server_ip = ? AND server_port = ?
+	ORDER BY seen_at DESC
+	`
+	rows, err := r.db.conn.QueryContext(ctx, q, ip, port)
+	if err != nil {
+		return nil, fmt.Errorf("querying known players: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scanning player name: %w", err)
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+// PlayerEventsOptions filters player_events queries.
+type PlayerEventsOptions struct {
+	Players []string  // filter by player name (OR'd)
+	Since  *time.Time
+	Until  *time.Time
+	Limit  int
+	Order  string  // "recent" (default) | "oldest"
+}
+
+// GetPlayerEventsForServer returns all player events for a specific server,
+// ordered by seen_at DESC by default.
+func (r *Repository) GetPlayerEventsForServer(ctx context.Context, ip string, port uint16, opts PlayerEventsOptions) ([]model.PlayerEvent, error) {
+	return r.listPlayerEvents(ctx, ip, port, "", opts)
+}
+
+// GetPlayerEventsForPlayer returns all player events for a specific player
+// (matched by name or id), ordered by seen_at DESC by default.
+func (r *Repository) GetPlayerEventsForPlayer(ctx context.Context, playerName string, opts PlayerEventsOptions) ([]model.PlayerEvent, error) {
+	return r.listPlayerEvents(ctx, "", 0, playerName, opts)
+}
+
+func (r *Repository) listPlayerEvents(ctx context.Context, serverIP string, serverPort uint16, playerName string, opts PlayerEventsOptions) ([]model.PlayerEvent, error) {
+	q := "SELECT server_ip, server_port, player_name, player_id, seen_at FROM player_events WHERE 1=1"
+	var args []any
+
+	if serverIP != "" {
+		q += " AND server_ip = ?"
+		args = append(args, serverIP)
+	}
+	if serverPort > 0 {
+		q += " AND server_port = ?"
+		args = append(args, serverPort)
+	}
+	if playerName != "" {
+		q += " AND player_name = ?"
+		args = append(args, playerName)
+	}
+	if len(opts.Players) > 0 {
+		q += " AND ("
+		var parts []string
+		for _, p := range opts.Players {
+			parts = append(parts, "player_name = ?")
+			args = append(args, p)
+		}
+		q += strings.Join(parts, " OR ") + ")"
+	}
+	if opts.Since != nil {
+		q += " AND seen_at >= ?"
+		args = append(args, *opts.Since)
+	}
+	if opts.Until != nil {
+		q += " AND seen_at <= ?"
+		args = append(args, *opts.Until)
+	}
+
+	switch opts.Order {
+	case "oldest":
+		q += " ORDER BY seen_at ASC"
+	default:
+		q += " ORDER BY seen_at DESC"
+	}
+
+	if opts.Limit > 0 {
+		q += " LIMIT ?"
+		args = append(args, opts.Limit)
+	}
+
+	rows, err := r.db.conn.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying player_events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []model.PlayerEvent
+	for rows.Next() {
+		var e model.PlayerEvent
+		if err := rows.Scan(&e.ServerIP, &e.ServerPort, &e.PlayerName, &e.PlayerID, &e.SeenAt); err != nil {
+			return nil, fmt.Errorf("scanning player event: %w", err)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
 }
 
 // offlinePlayerUUID generates a deterministic offline-mode UUID

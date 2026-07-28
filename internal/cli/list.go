@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -42,6 +43,7 @@ var availableColumns = map[string]struct {
 	"plugins":     {"PLUGINS", 20},
 	"protocol":    {"PROTOCOL", 10},
 	"player_names": {"PLAYER NAMES", 30},
+	"last_activity": {"LAST ACTIVITY", 20},
 }
 
 var emptyCellStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
@@ -71,6 +73,7 @@ func runList(args []string) error {
 		countryFlag    string
 		latencyFlag    string
 		sinceFlag      string
+		activeFlag     string
 		pluginFlag     string
 		protocolFlag   string
 		addressFlag    string
@@ -92,6 +95,7 @@ func runList(args []string) error {
 	fs.StringVar(&countryFlag, "country", "", "filter by country (substring match)")
 	fs.StringVar(&latencyFlag, "latency", "", "filter by latency in ms (e.g. <100, 50-200, >300)")
 	fs.StringVar(&sinceFlag, "since", "", "filter by last seen (e.g. 1h, 2d, unix timestamp, or ISO date)")
+	fs.StringVar(&activeFlag, "active", "", "filter by activity in last duration (e.g. 1h, 7d, 30m)")
 	fs.StringVar(&pluginFlag, "plugin", "", "filter by plugin name (substring match, comma-separated for OR)")
 	fs.StringVar(&protocolFlag, "protocol", "", "filter by protocol version (exact match)")
 	fs.StringVar(&addressFlag, "address", "", "filter by IP address (substring match)")
@@ -138,6 +142,11 @@ func runList(args []string) error {
 	sinceTime, err := ParseSinceFilter(sinceFlag)
 	if err != nil {
 		return fmt.Errorf("invalid --since: %w", err)
+	}
+
+	activeTime, err := ParseDurationFilter(activeFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --active: %w", err)
 	}
 
 	protocol, err := ParseProtocol(protocolFlag)
@@ -187,6 +196,7 @@ func runList(args []string) error {
 		LatencySQL:    latencySQL,
 		LatencyArgs:   latencyArgs,
 		Since:         sinceTime,
+		ActiveSince:   activeTime,
 		Plugin:        pluginNames,
 		Protocol:      protocol,
 		Address:       addressFlag,
@@ -279,6 +289,12 @@ func printServerTable(w io.Writer, servers []model.Server, columns []string, dat
 					row[j] = "-"
 				} else {
 					row[j] = s.LastSeen.Format(dateFormat)
+				}
+			case "last_activity":
+				if s.LastActivity.IsZero() {
+					row[j] = "-"
+				} else {
+					row[j] = s.LastActivity.Format(dateFormat)
 				}
 			case "motd":
 				row[j] = motd
@@ -509,6 +525,7 @@ func listUsage() string {
 	b.WriteString("  --country TEXT   filter by country (substring)\n")
 	b.WriteString("  --latency EXPR   filter by latency in ms (e.g. <100, 50-200, >300)\n")
 	b.WriteString("  --since DURATION filter by last seen (e.g. 1h, 48h, unix timestamp, or ISO date)\n")
+	b.WriteString("  --active DUR     filter by last player activity (e.g. 1h, 7d, 30m)\n")
 	b.WriteString("  --plugin TEXT    filter by plugin name (substring, comma-separated for OR)\n")
 	b.WriteString("  --protocol N     filter by protocol version (exact match)\n")
 	b.WriteString("  --address TEXT   filter by IP address (substring)\n")
@@ -522,6 +539,399 @@ func listUsage() string {
 	b.WriteString("  doorsniff list --sort=login\n")
 	b.WriteString("  doorsniff list --player Notch,Herobrine\n")
 	b.WriteString("  doorsniff list --map world --since 2d\n")
+	b.WriteString("  doorsniff list --active 1d\n")
 	b.WriteString("  doorsniff list --latency <200 --country US\n")
 	return b.String()
+}
+
+// runListServer handles `doorsniff list server <ip>`.
+func runListServer(args []string) error {
+	fs := flag.NewFlagSet("list server", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var (
+		playerFlag  string
+		sinceFlag  string
+		untilFlag  string
+		orderFlag  string
+		limitFlag  int
+		databaseFlag string
+	)
+	fs.StringVar(&playerFlag, "player", "", "filter by player name (comma-separated)")
+	fs.StringVar(&sinceFlag, "since", "", "filter by time (e.g. 7d, 24h, unix timestamp, ISO date)")
+	fs.StringVar(&untilFlag, "until", "", "filter by time until (e.g. 7d, 24h, unix timestamp, ISO date)")
+	fs.StringVar(&orderFlag, "sort", "recent", "sort by: recent (default) | oldest | player")
+	fs.IntVar(&limitFlag, "limit", 0, "max rows (0 = unlimited)")
+	fs.StringVar(&databaseFlag, "database", "", "override database path")
+
+	if err := fs.Parse(rearrangeFlagsFirst(args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(os.Stdout, listServerUsage())
+			return nil
+		}
+		return fmt.Errorf("parsing flags: %w", err)
+	}
+
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: doorsniff list server <ip> [flags]")
+	}
+
+	target := fs.Args()[0]
+	var ip string
+	var port uint16 = 25565
+	if idx := strings.Index(target, ":"); idx > 0 {
+		ip = target[:idx]
+		p, err := strconv.ParseUint(target[idx+1:], 10, 16)
+		if err != nil {
+			return fmt.Errorf("invalid port in %q", target)
+		}
+		port = uint16(p)
+	} else {
+		ip = target
+	}
+
+	since, err := ParseSinceFilter(sinceFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --since: %w", err)
+	}
+	until, err := ParseUntilFilter(untilFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --until: %w", err)
+	}
+
+	players := ParsePlayerNames(playerFlag)
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	dbPath := cfg.DatabasePath
+	if databaseFlag != "" {
+		dbPath = databaseFlag
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	db, err := storage.Open(ctx, dbPath)
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer db.Close()
+
+	if err := db.EnsureSchema(ctx); err != nil {
+		return fmt.Errorf("ensuring schema: %w", err)
+	}
+	repo := storage.NewRepository(db)
+
+	orderForScans := orderFlag
+	if orderForScans == "player" {
+		orderForScans = "recent"
+	}
+
+	scanOpts := storage.ListServerScansOptions{
+		Since: since,
+		Until: until,
+		Limit: limitFlag,
+		Order: orderForScans,
+	}
+	scans, err := repo.ListServerScans(ctx, ip, port, scanOpts)
+	if err != nil {
+		return fmt.Errorf("querying server scans: %w", err)
+	}
+
+	if len(scans) == 0 {
+		fmt.Println("no scan history found.")
+		return nil
+	}
+
+	var playerName string
+	if len(players) == 1 {
+		playerName = players[0]
+	}
+
+	// Build a map of seen_at -> []player_names for this server. We always
+	// pull all events in the time range so that the timeline can both:
+	//   1) tell whether a given player was online (--player mode); and
+	//   2) list every player present at each scan (default mode).
+	playersByScan := make(map[string][]string)
+	events, err := repo.GetPlayerEventsForServer(ctx, ip, port, storage.PlayerEventsOptions{
+		Since: since,
+		Until: until,
+	})
+	if err != nil {
+		return fmt.Errorf("querying player events: %w", err)
+	}
+	for _, e := range events {
+		key := e.SeenAt.Format(time.RFC3339)
+		playersByScan[key] = append(playersByScan[key], e.PlayerName)
+	}
+
+	onlineTimes := make(map[string]bool)
+	if playerName != "" {
+		for _, e := range events {
+			if e.PlayerName == playerName {
+				onlineTimes[e.SeenAt.Format(time.RFC3339)] = true
+			}
+		}
+	}
+
+	printServerScanTimeline(os.Stdout, scans, playerName, onlineTimes, playersByScan, cfg.ListDateFormat, cfg.ListServerPlayerMax)
+	return nil
+}
+
+// runListPlayer handles `doorsniff list player <name>`.
+func runListPlayer(args []string) error {
+	fs := flag.NewFlagSet("list player", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var (
+		serverFlag  string
+		sinceFlag   string
+		untilFlag   string
+		orderFlag   string
+		limitFlag   int
+		databaseFlag string
+	)
+	fs.StringVar(&serverFlag, "server", "", "filter by server IP:port (comma-separated)")
+	fs.StringVar(&sinceFlag, "since", "", "filter by time (e.g. 7d, 24h, unix timestamp, ISO date)")
+	fs.StringVar(&untilFlag, "until", "", "filter by time until (e.g. 7d, 24h, unix timestamp, ISO date)")
+	fs.StringVar(&orderFlag, "sort", "recent", "sort by: recent (default) | oldest | server")
+	fs.IntVar(&limitFlag, "limit", 0, "max rows (0 = unlimited)")
+	fs.StringVar(&databaseFlag, "database", "", "override database path")
+
+	if err := fs.Parse(rearrangeFlagsFirst(args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(os.Stdout, listPlayerUsage())
+			return nil
+		}
+		return fmt.Errorf("parsing flags: %w", err)
+	}
+
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: doorsniff list player <name> [flags]")
+	}
+
+	playerName := fs.Args()[0]
+
+	since, err := ParseSinceFilter(sinceFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --since: %w", err)
+	}
+	until, err := ParseUntilFilter(untilFlag)
+	if err != nil {
+		return fmt.Errorf("invalid --until: %w", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	dbPath := cfg.DatabasePath
+	if databaseFlag != "" {
+		dbPath = databaseFlag
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	db, err := storage.Open(ctx, dbPath)
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer db.Close()
+
+	if err := db.EnsureSchema(ctx); err != nil {
+		return fmt.Errorf("ensuring schema: %w", err)
+	}
+	repo := storage.NewRepository(db)
+
+	opts := storage.PlayerEventsOptions{
+		Since: since,
+		Until: until,
+		Limit: limitFlag,
+		Order: orderFlag,
+	}
+	events, err := repo.GetPlayerEventsForPlayer(ctx, playerName, opts)
+	if err != nil {
+		return fmt.Errorf("querying player events: %w", err)
+	}
+
+	printPlayerEventsForPlayer(os.Stdout, events, cfg.ListDateFormat)
+	return nil
+}
+
+func printPlayerEventsForServer(w io.Writer, events []model.PlayerEvent, dateFormat string) {
+	if len(events) == 0 {
+		fmt.Println("no player history found.")
+		return
+	}
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	headers := []string{"SEEN", "PLAYER", "ID"}
+	widths := []int{20, 20, 36}
+	fmt.Fprintf(w, "%-*s %-*s %-*s\n", widths[0], headers[0], widths[1], headers[1], widths[2], headers[2])
+	for _, e := range events {
+		seen := e.SeenAt.Format(dateFormat)
+		playerID := e.PlayerID
+		if playerID == "" {
+			playerID = "-"
+		}
+		fmt.Fprintf(w, "%-*s %-*s %-*s\n",
+			widths[0], dimStyle.Render(seen),
+			widths[1], e.PlayerName,
+			widths[2], dimStyle.Render(playerID))
+	}
+}
+
+func printPlayerEventsForPlayer(w io.Writer, events []model.PlayerEvent, dateFormat string) {
+	if len(events) == 0 {
+		fmt.Println("no player history found.")
+		return
+	}
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	headers := []string{"SEEN", "SERVER", "ID"}
+	widths := []int{20, 22, 36}
+	fmt.Fprintf(w, "%-*s %-*s %-*s\n", widths[0], headers[0], widths[1], headers[1], widths[2], headers[2])
+	for _, e := range events {
+		seen := e.SeenAt.Format(dateFormat)
+		addr := fmt.Sprintf("%s:%d", e.ServerIP, e.ServerPort)
+		playerID := e.PlayerID
+		if playerID == "" {
+			playerID = "-"
+		}
+		fmt.Fprintf(w, "%-*s %-*s %-*s\n",
+			widths[0], dimStyle.Render(seen),
+			widths[1], addr,
+			widths[2], dimStyle.Render(playerID))
+	}
+}
+
+func printServerScanTimeline(w io.Writer, scans []model.ServerScan, playerName string, onlineTimes map[string]bool, playersByScan map[string][]string, dateFormat string, playerMax int) {
+	var headers []string
+	var rows [][]string
+	for _, scan := range scans {
+		seenStr := scan.ScannedAt.Format(dateFormat)
+		key := scan.ScannedAt.Format(time.RFC3339)
+		switch {
+		case playerName != "":
+			// per-player mode: show ONLINE / ABSENT / NO_RESPONSE
+			statusStr := "ABSENT"
+			if !scan.HadResponse {
+				statusStr = "NO_RESPONSE"
+			} else if onlineTimes[key] {
+				statusStr = "ONLINE"
+			}
+			rows = append(rows, []string{seenStr, statusStr, playerName})
+		case !scan.HadResponse:
+			rows = append(rows, []string{seenStr, "NO", "-"})
+		default:
+			players := playersByScan[key]
+			row := []string{seenStr, "YES", formatPlayerList(players, playerMax)}
+			rows = append(rows, row)
+		}
+	}
+
+	if playerName != "" {
+		headers = []string{"SEEN", "STATUS", "PLAYER"}
+	} else {
+		headers = []string{"SEEN", "RESPONSE", "PLAYERS"}
+	}
+
+	widths := []int{20, 14, 40}
+
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("240"))).
+		Headers(headers...).
+		Rows(rows...).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			s := lipgloss.NewStyle().Width(widths[col])
+			if row == table.HeaderRow {
+				return s.Foreground(lipgloss.Color("252")).Bold(true)
+			}
+			if col == 0 {
+				return s.Foreground(lipgloss.Color("245"))
+			}
+			if col == 1 {
+				// status/response column — color based on the row content.
+				if row >= 0 && row < len(rows) {
+					switch rows[row][1] {
+					case "YES", "ONLINE":
+						return s.Foreground(lipgloss.Color("82")).Bold(true)
+					case "NO", "ABSENT", "NO_RESPONSE":
+						return s.Foreground(lipgloss.Color("241"))
+					}
+				}
+			}
+			if col == 2 && playerName != "" {
+				return s.Foreground(lipgloss.Color("245"))
+			}
+			return s
+		})
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, t.Render())
+	fmt.Fprintf(w, "  %s\n\n", lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
+		fmt.Sprintf("%d scan(s) shown", len(scans))))
+}
+
+// formatPlayerList joins player names with ", ". When playerMax > 0,
+// only the first playerMax names are shown followed by "+N more".
+func formatPlayerList(players []string, playerMax int) string {
+	if len(players) == 0 {
+		return "-"
+	}
+	if playerMax <= 0 || len(players) <= playerMax {
+		return strings.Join(players, ", ")
+	}
+	shown := strings.Join(players[:playerMax], ", ")
+	return fmt.Sprintf("%s (+%d more)", shown, len(players)-playerMax)
+}
+
+func listServerUsage() string {
+	return `doorsniff list server <ip> — show scan and player history for a server
+
+Usage:
+  doorsniff list server <ip> [flags]
+
+Flags:
+  --player TEXT    filter by player name (single name; shows ONLINE/ABSENT/NO_SCAN per scan)
+  --since DUR      show events after duration (e.g. 7d, 24h, unix timestamp, ISO date)
+  --until DUR      show events before duration (e.g. 7d, 24h, unix timestamp, ISO date)
+  --sort ORDER     recent (default) | oldest
+  --limit N        max rows (0 = unlimited)
+  --database PATH  override database path
+
+Output columns:
+  without --player: SEEN | RESPONSE (YES/NO)
+  with    --player: SEEN | STATUS (ONLINE/ABSENT/NO_RESPONSE) | PLAYER
+
+Examples:
+  doorsniff list server 1.2.3.4:25565
+  doorsniff list server 1.2.3.4:25565 --player Notch
+  doorsniff list server 1.2.3.4:25565 --since 7d
+`
+}
+
+func listPlayerUsage() string {
+	return `doorsniff list player <name> — show server history for a player
+
+Usage:
+  doorsniff list player <name> [flags]
+
+Flags:
+  --server IP:PORT  filter by server (comma-separated)
+  --since DUR      show events after duration (e.g. 7d, 24h, unix timestamp, ISO date)
+  --until DUR      show events before duration (e.g. 7d, 24h, unix timestamp, ISO date)
+  --sort ORDER     recent (default) | oldest | server
+  --limit N        max rows (0 = unlimited)
+  --database PATH  override database path
+
+Examples:
+  doorsniff list player Notch
+  doorsniff list player Notch --since 30d
+  doorsniff list player Notch --sort oldest
+`
 }

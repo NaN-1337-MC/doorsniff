@@ -7,7 +7,7 @@ import (
 
 // currentSchemaVersion is the latest schema version. Bump on every
 // backward-incompatible change and add a new entry to migrations.
-const currentSchemaVersion = 7
+const currentSchemaVersion = 8
 
 type migration struct {
 	version int
@@ -25,6 +25,7 @@ var migrations = []migration{
 	{version: 5, sql: schemaV5},
 	{version: 6, sql: schemaV6},
 	{version: 7, sql: schemaV7},
+	{version: 8, sql: schemaV8},
 }
 
 const schemaV1 = `
@@ -118,6 +119,23 @@ CREATE TABLE player_events (
 CREATE INDEX IF NOT EXISTS idx_player_events_server ON player_events(server_ip, server_port, seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_player_events_player ON player_events(player_name, seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_player_events_player_id ON player_events(player_id, seen_at DESC);
+`
+
+const schemaV8 = `
+CREATE TABLE IF NOT EXISTS server_scans (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_ip    TEXT    NOT NULL,
+  server_port  INTEGER NOT NULL,
+  scanned_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  had_response INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_server_scans_lookup
+  ON server_scans(server_ip, server_port, scanned_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_server_scans_recent
+  ON server_scans(scanned_at DESC)
+  WHERE had_response = 1;
 `
 
 // EnsureSchema applies any pending migrations. Safe to call on every
