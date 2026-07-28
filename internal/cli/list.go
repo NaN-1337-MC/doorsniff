@@ -32,6 +32,7 @@ var availableColumns = map[string]struct {
 	"address":    {"ADDRESS", 22},
 	"version":    {"VERSION", 20},
 	"login":     {"LOGIN", 10},
+	"last_login": {"LAST LOGIN", 12},
 	"players":   {"PLAYERS", 10},
 	"latency":   {"LATENCY", 9},
 	"last_seen": {"LAST SEEN", 20},
@@ -73,6 +74,7 @@ func runList(args []string) error {
 		pluginFlag     string
 		protocolFlag   string
 		addressFlag    string
+		lastLoginFlag  string
 	)
 
 	fs.StringVar(&versionFlag, "version", "", "filter by version (e.g. 1.21.1 or 1.21.1,26.1.2)")
@@ -93,6 +95,7 @@ func runList(args []string) error {
 	fs.StringVar(&pluginFlag, "plugin", "", "filter by plugin name (substring match, comma-separated for OR)")
 	fs.StringVar(&protocolFlag, "protocol", "", "filter by protocol version (exact match)")
 	fs.StringVar(&addressFlag, "address", "", "filter by IP address (substring match)")
+	fs.StringVar(&lastLoginFlag, "last-login", "", "filter by last_login state (disconnect, unknown, full, kicked, banned)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -159,6 +162,10 @@ func runList(args []string) error {
 	}
 	defer func() { _ = db.Close() }()
 
+	if err := db.EnsureSchema(ctx); err != nil {
+		return fmt.Errorf("ensuring schema: %w", err)
+	}
+
 	repo := storage.NewRepository(db)
 
 	query := storage.ListQuery{
@@ -183,6 +190,7 @@ func runList(args []string) error {
 		Plugin:        pluginNames,
 		Protocol:      protocol,
 		Address:       addressFlag,
+		LastLogin:     normalizeLastLogin(lastLoginFlag),
 	}
 
 	servers, err := repo.ListServersFiltered(ctx, query)
@@ -243,6 +251,8 @@ func printServerTable(w io.Writer, servers []model.Server, columns []string, dat
 				row[j] = s.VersionName
 			case "login":
 				row[j] = loginModeLabel(s.LoginMode)
+			case "last_login":
+				row[j] = loginModeLabel(s.LastLogin)
 			case "players":
 				row[j] = fmt.Sprintf("%d/%d", s.NumPlayers, s.MaxPlayers)
 			case "latency":
@@ -430,6 +440,23 @@ func normalizeLoginMode(s string) string {
 	}
 }
 
+func normalizeLastLogin(s string) string {
+	switch strings.ToLower(s) {
+	case "disconnect":
+		return "disconnect"
+	case "unknown":
+		return "unknown"
+	case "full":
+		return "full"
+	case "kicked", "kick":
+		return "kicked"
+	case "banned", "ban":
+		return "banned"
+	default:
+		return ""
+	}
+}
+
 func latencyColor(ms int64) lipgloss.Color {
 	switch {
 	case ms < 200:
@@ -468,6 +495,7 @@ func listUsage() string {
 	b.WriteString("  --plugin TEXT    filter by plugin name (substring, comma-separated for OR)\n")
 	b.WriteString("  --protocol N     filter by protocol version (exact match)\n")
 	b.WriteString("  --address TEXT   filter by IP address (substring)\n")
+	b.WriteString("  --last-login S   filter by last_login state (disconnect, unknown, full, kicked, banned)\n")
 	b.WriteString("\nFilter operators for counts: =, >, <, >=, <=, - (range)\n")
 	b.WriteString("Examples:\n")
 	b.WriteString("  doorsniff list\n")
