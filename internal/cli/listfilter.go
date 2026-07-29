@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -153,142 +152,67 @@ func ParseVersionList(s string) []string {
 	return out
 }
 
-// versionMatch checks if the user-provided version input matches
-// a server-reported version string that may be an exact version
-// (e.g. "1.20.4") or a range (e.g. "1.20.x-1.21.x").
+// ExpandVersionToSQLPatterns converts a user-provided version filter
+// (possibly comma-separated, possibly with range syntax like "1.20.x-1.21.x")
+// into a flat slice of substring patterns to be wrapped with "%" by the
+// SQL builder. Each pattern is intended to match any version_name that
+// contains it.
 //
-// Range syntax: "X.y.x-Z.w.x" means any version from X.y.0 (inclusive)
-// to Z.w.0 (exclusive). "X.y.x" alone means the same as X.y.0 to (X.y+1).0.
-func VersionMatches(serverVersion, userInput string) bool {
-	vm := parseServerVersion(serverVersion)
-	if vm == nil {
-		return false
-	}
-	return vm.matches(userInput)
-}
-
-// versionMatch is a version comparison target.
-type versionMatch interface {
-	matches(input string) bool
-}
-
-// exactVersion matches a single exact version string.
-type exactVersion string
-
-func (e exactVersion) matches(input string) bool {
-	return string(e) == input
-}
-
-// rangeVersion matches any version in [lo, hi).
-type rangeVersion struct {
-	lo majorMinor
-	hi majorMinor
-}
-
-func (r rangeVersion) matches(input string) bool {
-	mv, ok := parseMajorMinor(input)
-	if !ok {
-		return false
-	}
-	return mv.GE(r.lo) && mv.LT(r.hi)
-}
-
-// majorMinor represents a major.minor version for ordering.
-type majorMinor struct{ major, minor int }
-
-func (m majorMinor) GE(other majorMinor) bool {
-	if m.major != other.major {
-		return m.major > other.major
-	}
-	return m.minor >= other.minor
-}
-
-func (m majorMinor) LT(other majorMinor) bool {
-	if m.major != other.major {
-		return m.major < other.major
-	}
-	return m.minor < other.minor
-}
-
-func parseMajorMinor(s string) (majorMinor, bool) {
-	parts := strings.Split(s, ".")
-	if len(parts) < 2 {
-		return majorMinor{}, false
-	}
-	maj, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return majorMinor{}, false
-	}
-	min, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return majorMinor{}, false
-	}
-	return majorMinor{major: maj, minor: min}, true
-}
-
-// parseServerVersion extracts a version pattern from a raw server
-// version_name string such as "Paper 1.20.4" or "1.20.x-1.21.x".
-func parseServerVersion(raw string) versionMatch {
-	s := strings.TrimSpace(raw)
-
-	// Try to extract version number from the string.
-	// Pattern: major.minor.x (possibly followed by -major.minor.x)
-	// Examples: "1.20.x-1.21.x", "Paper 1.20.4", "1.20.4"
-	//
-	// Regex breakdown:
-	// - Optional prefix (Paper, Spigot, BungeeCord, etc.): [^\d]*
-	// - Major.minor.patch or major.minor.x: (\d+\.\d+(?:\.\d+|\.x))
-	// - Optional range suffix: (?:-\d+\.\d+\.x)?
-	mainRX := regexp.MustCompile(`[^\d]*(\d+\.\d+(?:\.\d+|\.x))`)
-	m := mainRX.FindStringSubmatch(s)
-	if m == nil {
+// Mapping rules:
+//
+//	"26.1.2"      → ["26.1.2"]   exact: any version_name containing "26.1.2"
+//	"1.20"        → ["1.20."]    major.minor: any X.Y.Z where X.Y == "1.20"
+//	"1.20.x"      → ["1.20."]    wildcard: same as above
+//	"1.20.x-1.21.x" → ["1.20.", "1.21."]   range: inclusive lower, exclusive upper
+//	"1.20.x,26.1.2" → ["1.20.", "26.1.2"]  comma-separated = OR of patterns
+//
+// The returned strings are meant to be wrapped with "%" on both sides
+// when building the SQL LIKE clause, so "%1.20.%" matches "Paper 1.20.4"
+// and "%26.1.2%" matches "Paper 26.1.2".
+func ExpandVersionToSQLPatterns(input string) []string {
+	if input == "" {
 		return nil
 	}
-	version := m[1]
-
-	// Check for range pattern: "1.20.x-1.21.x"
-	rangeRX := regexp.MustCompile(`(\d+)\.(\d+)\.x-(\d+)\.(\d+)\.x`)
-	rm := rangeRX.FindStringSubmatch(version)
-	if rm != nil {
-		lo := majorMinor{major: toInt(rm[1]), minor: toInt(rm[2])}
-		hi := majorMinor{major: toInt(rm[3]), minor: toInt(rm[4])}
-		return rangeVersion{lo: lo, hi: hi}
-	}
-
-	// Check for single x pattern: "1.20.x"
-	singleX := regexp.MustCompile(`(\d+)\.(\d+)\.x$`)
-	sxm := singleX.FindStringSubmatch(version)
-	if sxm != nil {
-		lo := majorMinor{major: toInt(sxm[1]), minor: toInt(sxm[2])}
-		hi := majorMinor{major: lo.major, minor: lo.minor + 1}
-		// Edge case: 1.20.x -> hi is 1.21.0
-		if lo.minor == 19 { // 1.20.x -> 1.21.0
-			hi = majorMinor{major: lo.major + 1, minor: 0}
+	var out []string
+	for _, v := range strings.Split(input, ",") {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
 		}
-		return rangeVersion{lo: lo, hi: hi}
+		// Range: "1.20.x-1.21.x"
+		if idx := strings.Index(v, "-"); idx > 0 {
+			lo, hi := v[:idx], v[idx+1:]
+			lo = strings.TrimSpace(lo)
+			hi = strings.TrimSpace(hi)
+			out = append(out, normalizeVersionSegment(lo))
+			out = append(out, normalizeVersionSegment(hi))
+			continue
+		}
+		out = append(out, normalizeVersionSegment(v))
 	}
-
-	// Exact version: "1.20.4"
-	return exactVersion(version)
+	return out
 }
 
-func toInt(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
-}
-
-// ToVersionSQL returns a SQL fragment and args for version matching.
-func ToVersionSQL(versions []string) (string, []any) {
-	if len(versions) == 0 {
-		return "", nil
+// normalizeVersionSegment converts a single version segment like
+// "1.20.x", "1.20", or "1.20.4" into the substring pattern that will
+// match a version_name containing that version. Wildcards ("x") are
+// stripped; bare "X.Y" gets a trailing dot so it doesn't match "X.Y.0"
+// by accident under the LIKE wrapper.
+func normalizeVersionSegment(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
 	}
-	var parts []string
-	var args []any
-	for _, v := range versions {
-		parts = append(parts, "LOWER(version_name) LIKE ?")
-		args = append(args, "%"+strings.ToLower(v)+"%")
+	// Drop trailing ".x" wildcard.
+	if strings.HasSuffix(s, ".x") {
+		s = strings.TrimSuffix(s, ".x")
 	}
-	return "(" + strings.Join(parts, " OR ") + ")", args
+	// Ensure bare "X.Y" gets a trailing dot so "%X.Y.%" doesn't also
+	// match "X.Y0.0" if such a string ever appeared.
+	if strings.Count(s, ".") == 1 && !strings.HasSuffix(s, ".") {
+		s += "."
+	}
+	return s
 }
 
 // ParsePortFilter parses a port filter: "25565" or "25500-25600".

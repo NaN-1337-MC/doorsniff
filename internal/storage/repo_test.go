@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -458,6 +459,113 @@ func TestKnownPlayersForServer(t *testing.T) {
 	}
 	if players[0] != "Notch" {
 		t.Errorf("players[0] = %q, want Notch (most recent first)", players[0])
+	}
+}
+
+// TestListServersFiltered_VersionFilter guards the regression where
+// --version was filtered in Go AFTER the SQL LIMIT was applied. With
+// LIMIT=N and many non-matching rows, the previous Go-side filter
+// would only see rows that happened to be in the top N.
+//
+// Post-fix: the version filter is pushed into SQL via LIKE so LIMIT
+// applies to filtered rows. The test inserts M matching servers plus
+// many non-matching ones, and asserts that limit=N returns N matching
+// rows regardless of insertion order.
+func TestListServersFiltered_VersionFilter(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// 25 servers that DO NOT match the version filter — these would
+	// push matching servers out of the SQL top-N if the filter were
+	// applied after LIMIT.
+	for i := 0; i < 25; i++ {
+		s := model.Server{
+			IP:          fmt.Sprintf("9.9.%d.1", i),
+			Port:        25565,
+			FirstSeen:   now,
+			LastSeen:    now,
+			VersionName: "Paper 1.20.4",
+		}
+		if err := repo.UpsertServer(ctx, s); err != nil {
+			t.Fatalf("upsert noise %d: %v", i, err)
+		}
+	}
+
+	// 5 servers that DO match "26.1.2".
+	for i := 0; i < 5; i++ {
+		s := model.Server{
+			IP:          fmt.Sprintf("8.8.%d.1", i),
+			Port:        25565,
+			FirstSeen:   now,
+			LastSeen:    now,
+			VersionName: "Paper 26.1.2",
+		}
+		if err := repo.UpsertServer(ctx, s); err != nil {
+			t.Fatalf("upsert match %d: %v", i, err)
+		}
+	}
+
+	// With LIMIT=10, the pre-fix behaviour would return at most 10
+	// rows after the SQL LIMIT, then Go would filter those — likely
+	// 0 because the matching rows sit beyond the top 10. Post-fix
+	// (version pushed to SQL), LIMIT applies to filtered rows so we
+	// get 5 matching rows regardless.
+	got, err := repo.ListServersFiltered(ctx, ListQuery{
+		Versions: []string{"26.1.2"},
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("ListServersFiltered: %v", err)
+	}
+	if len(got) != 5 {
+		t.Errorf("len = %d, want 5 (version filter must be applied in SQL before LIMIT)", len(got))
+	}
+	for _, s := range got {
+		if !strings.Contains(s.VersionName, "26.1.2") {
+			t.Errorf("row %s has VersionName %q, want it to contain 26.1.2", s.Address(), s.VersionName)
+		}
+	}
+}
+
+// TestListServersFiltered_VersionRangePattern guards the range expansion
+// (e.g. "1.20.x-1.21.x" → two LIKE patterns) that lives in the CLI.
+// The CLI pre-expands and passes the patterns as []string; the SQL
+// builder must OR them correctly.
+func TestListServersFiltered_VersionRangePattern(t *testing.T) {
+	t.Parallel()
+	repo, cleanup := newTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	servers := []model.Server{
+		{IP: "1.1.1.1", Port: 25565, FirstSeen: now, LastSeen: now, VersionName: "Paper 1.20.4"}, // matches lo
+		{IP: "1.1.1.2", Port: 25565, FirstSeen: now, LastSeen: now, VersionName: "Paper 1.21.1"}, // matches hi (upper bound is non-inclusive at 1.22.x)
+		{IP: "1.1.1.3", Port: 25565, FirstSeen: now, LastSeen: now, VersionName: "Paper 1.22.0"}, // out of range
+		{IP: "1.1.1.4", Port: 25565, FirstSeen: now, LastSeen: now, VersionName: "Paper 1.19.4"}, // out of range
+	}
+	for _, s := range servers {
+		if err := repo.UpsertServer(ctx, s); err != nil {
+			t.Fatalf("upsert %s: %v", s.IP, err)
+		}
+	}
+
+	// Range "1.20.x-1.21.x" expands to patterns ["1.20.", "1.21."].
+	// Under "%...%" LIKE, both 1.20.x and 1.21.x match. 1.22.0 and
+	// 1.19.4 do NOT.
+	got, err := repo.ListServersFiltered(ctx, ListQuery{
+		Versions: []string{"1.20.", "1.21."},
+	})
+	if err != nil {
+		t.Fatalf("ListServersFiltered: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("len = %d, want 2 (1.20.4 and 1.21.1 should match)", len(got))
 	}
 }
 

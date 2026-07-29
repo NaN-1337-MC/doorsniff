@@ -7,6 +7,34 @@ import (
 	"time"
 )
 
+func TestExpandVersionToSQLPatterns(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{name: "empty", in: "", want: nil},
+		{name: "exact version", in: "26.1.2", want: []string{"26.1.2"}},
+		{name: "wildcard x", in: "1.20.x", want: []string{"1.20."}},
+		{name: "major minor only", in: "1.20", want: []string{"1.20."}},
+		{name: "range x-y", in: "1.20.x-1.21.x", want: []string{"1.20.", "1.21."}},
+		{name: "range major.minor-only", in: "1.20-1.21", want: []string{"1.20.", "1.21."}},
+		{name: "comma list", in: "26.1.2,1.20.4", want: []string{"26.1.2", "1.20.4"}},
+		{name: "comma + range", in: "1.20.x-1.21.x,26.1.2", want: []string{"1.20.", "1.21.", "26.1.2"}},
+		{name: "whitespace trimmed", in: " 1.20.x , 1.21.x ", want: []string{"1.20.", "1.21."}},
+		{name: "empty entries skipped", in: "1.20,,26.1.2", want: []string{"1.20.", "26.1.2"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ExpandVersionToSQLPatterns(tc.in)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("ExpandVersionToSQLPatterns(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRearrangeFlagsFirst(t *testing.T) {
 	cases := []struct {
 		name string
