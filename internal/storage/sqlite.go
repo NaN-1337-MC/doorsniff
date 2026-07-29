@@ -44,6 +44,13 @@ func Open(ctx context.Context, path string) (*DB, error) {
 			_ = conn.Close()
 			return nil, fmt.Errorf("setting synchronous mode: %w", err)
 		}
+		// Wait up to 5 s before returning SQLITE_BUSY so that brief
+		// lock contentions (common at high write throughput) are retried
+		// instead of propagated as errors.
+		if _, err := conn.ExecContext(ctx, "PRAGMA busy_timeout=5000"); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("setting busy_timeout: %w", err)
+		}
 	}
 
 	return &DB{conn: conn, path: path}, nil

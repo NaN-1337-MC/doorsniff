@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -112,6 +113,8 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (*Sta
 
 	limiter := rate.NewLimiter(rate.Limit(cfg.QPS), cfg.QPS)
 	results := make(chan model.Server, 256)
+	scanRecCh := make(chan scanRecord, 256)
+	playerEvtCh := make(chan playerEvent, 256)
 
 	stats := &Stats{}
 	state := cfg.State
@@ -141,20 +144,13 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (*Sta
 		cfg.Ticker = tick
 	}
 
-	writerDone := make(chan struct{})
-	go func() {
-		defer close(writerDone)
-		if cfg.Repo == nil {
-			for range results {
-			}
-			return
-		}
-		for s := range results {
-			if err := cfg.Repo.UpsertServer(ctx, s); err != nil {
-				slog.Warn("upsert failed", "ip", s.IP, "port", s.Port, "err", err)
-			}
-		}
-	}()
+	dbw := &dbWriter{
+		repo:        cfg.Repo,
+		scanRecCh:   scanRecCh,
+		playerEvtCh: playerEvtCh,
+		results:     results,
+	}
+	dbw.start(ctx)
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(cfg.Workers)
@@ -176,7 +172,7 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (*Sta
 			loginMode:     cfg.LoginMode,
 			loginUser:     cfg.LoginUser,
 			playerHistory: cfg.PlayerHistory,
-			repo:          cfg.Repo,
+			dbw:           dbw,
 		}
 		g.Go(func() error {
 			return wk.run(gctx)
@@ -184,8 +180,10 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (*Sta
 	}
 
 	workerErr := g.Wait()
+	close(scanRecCh)
+	close(playerEvtCh)
 	close(results)
-	<-writerDone
+	dbw.wait()
 
 	if tick != nil {
 		tick.Stop()
@@ -193,6 +191,75 @@ func Run(ctx context.Context, cfg PoolConfig, targets <-chan model.Target) (*Sta
 
 	stats.Duration = time.Since(start)
 	return stats, workerErr
+}
+
+type scanRecord struct {
+	ip     string
+	port   uint16
+	online bool
+	at     time.Time
+}
+
+type playerEvent struct {
+	ip     string
+	port   uint16
+	player model.SamplePlayer
+	at     time.Time
+}
+
+type dbWriter struct {
+	repo        *storage.Repository
+	results     <-chan model.Server
+	scanRecCh   chan scanRecord
+	playerEvtCh chan playerEvent
+	wg          sync.WaitGroup
+}
+
+func (w *dbWriter) start(ctx context.Context) {
+	w.wg.Add(3)
+	go func() {
+		defer w.wg.Done()
+		if w.repo == nil {
+			for range w.scanRecCh {
+			}
+			return
+		}
+		for rec := range w.scanRecCh {
+			if err := w.repo.RecordServerScan(ctx, rec.ip, rec.port, rec.online, rec.at); err != nil {
+				slog.Warn("recording server scan", "ip", rec.ip, "port", rec.port, "err", err)
+			}
+		}
+	}()
+	go func() {
+		defer w.wg.Done()
+		if w.repo == nil {
+			for range w.playerEvtCh {
+			}
+			return
+		}
+		for evt := range w.playerEvtCh {
+			if err := w.repo.RecordPlayerEvent(ctx, evt.ip, evt.port, evt.player, evt.at); err != nil {
+				slog.Warn("recording player event", "ip", evt.ip, "port", evt.port, "player", evt.player.Name, "err", err)
+			}
+		}
+	}()
+	go func() {
+		defer w.wg.Done()
+		if w.repo == nil {
+			for range w.results {
+			}
+			return
+		}
+		for s := range w.results {
+			if err := w.repo.UpsertServer(ctx, s); err != nil {
+				slog.Warn("upsert failed", "ip", s.IP, "port", s.Port, "err", err)
+			}
+		}
+	}()
+}
+
+func (w *dbWriter) wait() {
+	w.wg.Wait()
 }
 
 // runWorker is the body of one pool worker. It reads targets until the
@@ -219,7 +286,7 @@ type worker struct {
 	loginMode     login.StealthMode
 	loginUser     string
 	playerHistory bool
-	repo          *storage.Repository
+	dbw           *dbWriter
 }
 
 // run reads targets until the channel is closed or the context is
@@ -451,25 +518,29 @@ func (wk *worker) printFound(s model.Server) {
 }
 
 func (wk *worker) recordPlayerEvents(ip string, port uint16, players []model.SamplePlayer, seenAt time.Time) {
-	if !wk.playerHistory || wk.repo == nil || len(players) == 0 {
+	if !wk.playerHistory || wk.dbw == nil || len(players) == 0 {
 		return
 	}
 	for _, p := range players {
 		if p.Name == "" {
 			continue
 		}
-		if err := wk.repo.RecordPlayerEvent(context.Background(), ip, port, p, seenAt); err != nil {
-			slog.Warn("recording player event", "ip", ip, "port", port, "player", p.Name, "err", err)
+		// Drop if channel is full — events are best-effort history.
+		select {
+		case wk.dbw.playerEvtCh <- playerEvent{ip: ip, port: port, player: p, at: seenAt}:
+		default:
 		}
 	}
 }
 
-func (wk *worker) recordServerScan(ip string, port uint16, hadResponse bool, at time.Time) {
-	if !wk.playerHistory || wk.repo == nil {
+func (wk *worker) recordServerScan(ip string, port uint16, online bool, at time.Time) {
+	if !wk.playerHistory || wk.dbw == nil {
 		return
 	}
-	if err := wk.repo.RecordServerScan(context.Background(), ip, port, hadResponse, at); err != nil {
-		slog.Warn("recording server scan", "ip", ip, "port", port, "err", err)
+	select {
+	case wk.dbw.scanRecCh <- scanRecord{ip: ip, port: port, online: online, at: at}:
+	default:
+		// Drop if channel is full — scan record is best-effort.
 	}
 }
 

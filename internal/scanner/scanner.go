@@ -116,9 +116,32 @@ func prepareResume(ctx context.Context, opts Options) (map[string]uint16, func(s
 
 	var onSeedDone func(string, uint16)
 	if opts.Repo != nil {
+		// Buffered channel so SaveProgress does not block the generator.
+		// A dedicated goroutine drains it asynchronously.
+		progressCh := make(chan struct{ ip string; port uint16 }, 256)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case item, ok := <-progressCh:
+					if !ok {
+						return
+					}
+					if err := opts.Repo.SaveProgress(ctx, item.ip, item.port); err != nil {
+						slog.Error("failed to save scan progress", "seed", item.ip, "err", err)
+					}
+				}
+			}
+		}()
+
 		onSeedDone = func(seedIP string, lastPort uint16) {
-			if err := opts.Repo.SaveProgress(ctx, seedIP, lastPort); err != nil {
-				slog.Error("failed to save scan progress", "seed", seedIP, "err", err)
+			select {
+			case progressCh <- struct{ ip string; port uint16 }{ip: seedIP, port: lastPort}:
+			default:
+				// Channel full — progress save is dropped. This is
+				// acceptable at extreme throughput; the scan still
+				// completes, just won't be resumable from this point.
 			}
 		}
 	}
