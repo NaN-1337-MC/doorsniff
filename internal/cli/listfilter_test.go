@@ -7,6 +7,52 @@ import (
 	"time"
 )
 
+func TestParseSortKey(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		sortKey string
+		reverse bool
+		want    string
+		wantErr bool
+	}{
+		{name: "default (recent)", sortKey: "", reverse: false, want: "last_seen DESC"},
+		{name: "recent", sortKey: "recent", reverse: false, want: "last_seen DESC"},
+		{name: "recent reverse", sortKey: "recent", reverse: true, want: "last_seen ASC"},
+		{name: "players", sortKey: "players", reverse: false, want: "num_players DESC"},
+		{name: "players reverse", sortKey: "players", reverse: true, want: "num_players ASC"},
+		{name: "latency", sortKey: "latency", reverse: false, want: "last_latency_ms ASC"},
+		{name: "latency reverse", sortKey: "latency", reverse: true, want: "last_latency_ms DESC"},
+		{name: "version", sortKey: "version", reverse: false, want: "version_name ASC"},
+		{name: "version reverse", sortKey: "version", reverse: true, want: "version_name DESC"},
+		{name: "port", sortKey: "port", reverse: false, want: "port ASC"},
+		{name: "port reverse", sortKey: "port", reverse: true, want: "port DESC"},
+		{name: "oldest", sortKey: "oldest", reverse: false, want: "first_seen ASC"},
+		{name: "oldest reverse", sortKey: "oldest", reverse: true, want: "first_seen DESC"},
+		{name: "login", sortKey: "login", reverse: false, want: "login_mode ASC"},
+		{name: "login reverse", sortKey: "login", reverse: true, want: "login_mode DESC"},
+		{name: "invalid", sortKey: "invalid", reverse: false, want: "", wantErr: true},
+		{name: "invalid reverse", sortKey: "invalid", reverse: true, want: "", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseSortKey(tc.sortKey, tc.reverse)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseSortKey(%q, %v) = %q, want %q", tc.sortKey, tc.reverse, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExpandVersionToSQLPatterns(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

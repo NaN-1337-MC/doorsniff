@@ -304,6 +304,7 @@ func (p *Progress) Header() string {
 // Render returns two lines: per-IP progress bar and overall progress bar.
 func (p *Progress) Render() string {
 	probed := p.Probed.Load()
+	found := p.Found.Load()
 	if probed > p.Total {
 		probed = p.Total
 	}
@@ -335,10 +336,11 @@ func (p *Progress) Render() string {
 	overallBar := p.Styles.BarFilled.Render(strings.Repeat(filledChar, filled)) +
 		p.Styles.BarEmpty.Render(strings.Repeat(emptyChar, width-filled))
 
-	line2 := fmt.Sprintf("%s  %s  %s  ETA %s  %s",
+	line2 := fmt.Sprintf("%s  %s  %s  %s  ETA %s  %s",
 		overallBar,
 		p.Styles.Pct.Render(fmt.Sprintf("%5.1f%%", pct)),
 		p.Styles.Meta.Render(fmt.Sprintf("(%s)", formatCount(probed)+"/"+formatCount(p.Total))),
+		p.Styles.Meta.Render(fmt.Sprintf("%s found", formatCount(found))),
 		p.Styles.Eta.Render(formatDuration(eta)),
 		p.Styles.Pps.Render(fmt.Sprintf("%.0f pps", pps)),
 	)

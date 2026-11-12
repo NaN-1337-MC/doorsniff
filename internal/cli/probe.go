@@ -36,6 +36,7 @@ type probeConfig struct {
 	fileFlag        string
 	seedsDir        string
 	dbPath          string
+	busyTimeoutMs   int
 	login           bool
 	loginMode       login.StealthMode
 	loginUser       string
@@ -59,7 +60,7 @@ func runProbe(args []string) error {
 	styles := scanner.NewStyles(pc.ascii)
 	printHeader(os.Stdout, styles, pc)
 
-	repo, dbClose, err := openProbeRepo(pc.dbPath)
+	repo, dbClose, err := openProbeRepo(pc.dbPath, pc.busyTimeoutMs)
 	if err != nil {
 		return err
 	}
@@ -100,6 +101,7 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 		loginModeFlag      string
 		loginUserFlag      string
 		playerHistoryFlag  bool
+		busyTimeoutFlag    int
 	)
 	fs.StringVar(&portsFlag, "ports", cfg.Ports, "port range, e.g. 25565, 25500-25600, 1-65535")
 	fs.IntVar(&qpsFlag, "qps", cfg.ProbeQPS, "global QPS limit")
@@ -116,6 +118,7 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 	fs.StringVar(&loginModeFlag, "login-mode", cfg.ProbeLoginMode, "login handshake aggressiveness: off | detect | intrusive")
 	fs.StringVar(&loginUserFlag, "login-user", cfg.LoginUser, "username for login handshake")
 	fs.BoolVar(&playerHistoryFlag, "playerhistory", cfg.ProbePlayerHistory, "record player visit history")
+	fs.IntVar(&busyTimeoutFlag, "busy-timeout", cfg.Storage.BusyTimeoutMs, "SQLite busy timeout in ms (raise for very high PPS)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -163,6 +166,7 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 		fileFlag:      fileFlag,
 		seedsDir:      seedsDir,
 		dbPath:        dbPath,
+		busyTimeoutMs: busyTimeoutFlag,
 		login:         loginMode != login.StealthOff,
 		loginMode:     loginMode,
 		loginUser:     loginUserFlag,
@@ -173,10 +177,10 @@ func parseProbeFlags(args []string) (*probeConfig, error) {
 // openProbeRepo opens the database, runs schema migrations, and
 // returns a Repository. The returned close func must be called
 // once to release the connection pool.
-func openProbeRepo(dbPath string) (*storage.Repository, func(), error) {
+func openProbeRepo(dbPath string, busyTimeoutMs int) (*storage.Repository, func(), error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
-	db, err := storage.Open(ctx, dbPath)
+	db, err := storage.Open(ctx, dbPath, storage.WithBusyTimeout(busyTimeoutMs))
 	if err != nil {
 		stop()
 		return nil, nil, fmt.Errorf("opening database: %w", err)
@@ -319,6 +323,7 @@ func probeUsage() string {
 	b.WriteString(fmt.Sprintf("  --login-mode MODE   off | detect | intrusive (default %s)\n", config.DefaultProbeLoginMode))
 	b.WriteString(fmt.Sprintf("  --login-user STR    username for login handshake (default %s)\n", config.DefaultLoginUser))
 	b.WriteString(fmt.Sprintf("  --playerhistory     record player visit history (default %t)\n", config.DefaultProbePlayerHistory))
+	b.WriteString(fmt.Sprintf("  --busy-timeout MS   SQLite busy timeout in ms (default %d)\n", config.DefaultBusyTimeoutMs))
 	return b.String()
 }
 

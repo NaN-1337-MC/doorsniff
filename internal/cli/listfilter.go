@@ -245,25 +245,35 @@ func ParsePortFilter(s string) (uint16, uint16, error) {
 }
 
 // ParseSortKey validates and normalizes a sort key.
-func ParseSortKey(s string) (string, error) {
+// When reverse is true, the sort direction is inverted.
+func ParseSortKey(s string, reverse bool) (string, error) {
+	var col, dir string
 	switch s {
 	case "", "recent":
-		return "last_seen DESC", nil
+		col, dir = "last_seen", "DESC"
 	case "players":
-		return "num_players DESC", nil
+		col, dir = "num_players", "DESC"
 	case "latency":
-		return "last_latency_ms ASC", nil
+		col, dir = "last_latency_ms", "ASC"
 	case "version":
-		return "version_name ASC", nil
+		col, dir = "version_name", "ASC"
 	case "port":
-		return "port ASC", nil
+		col, dir = "port", "ASC"
 	case "oldest":
-		return "first_seen ASC", nil
+		col, dir = "first_seen", "ASC"
 	case "login":
-		return "login_mode ASC", nil
+		col, dir = "login_mode", "ASC"
 	default:
 		return "", fmt.Errorf("invalid sort key %q (valid: players, latency, version, port, recent, oldest, login)", s)
 	}
+	if reverse {
+		if dir == "ASC" {
+			dir = "DESC"
+		} else {
+			dir = "ASC"
+		}
+	}
+	return col + " " + dir, nil
 }
 
 // ParseSinceFilter parses a time filter string.

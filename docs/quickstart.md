@@ -277,9 +277,12 @@ go mod tidy               # clean module graph
 network probes heavily; the scanner keeps going but the hit rate
 drops.
 
-**Database locked.** Another process is writing. The binary uses WAL;
-a rogue `sqlite3` shell holding a write transaction can lock writers.
-Close the shell and retry.
+**Database locked.** Another process is writing. The binary uses WAL and a
+single SQLite connection, so in-process `SQLITE_BUSY` is avoided; a rogue
+`sqlite3` shell holding a write transaction can still lock writers. The
+driver waits up to `storage.busy_timeout_ms` (default 5000) before giving
+up — raise it (e.g. `30000`) for very high PPS scans, or pass
+`--busy-timeout MS` on `probe`/`re-probe`. Close the rogue shell and retry.
 
 **Slow scan over `1-65535`.** Expected. With 256 workers and 200 QPS,
 a single IP takes 5-15 minutes depending on the network. Use

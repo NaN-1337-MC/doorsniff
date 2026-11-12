@@ -78,7 +78,7 @@ type Config struct {
 	MaxPlayerNamesDisplayLen  int `mapstructure:"max_player_names_display_len"`
 
 	// Storage settings
-	SQLiteSyncMode string `mapstructure:"sqlite_sync_mode"`
+	Storage StorageConfig `mapstructure:"storage"`
 
 	// Common settings
 	DatabasePath    string `mapstructure:"database_path"`
@@ -91,6 +91,14 @@ type Config struct {
 	EnableQuery     bool   `mapstructure:"enable_query"`
 	EnableExpansion bool   `mapstructure:"enable_expansion"`
 	DebugLogin      bool   `mapstructure:"debug_login"`
+}
+
+// StorageConfig holds SQLite connection tuning.
+type StorageConfig struct {
+	SQLiteSyncMode string `mapstructure:"sqlite_sync_mode"`
+	// BusyTimeoutMs is how long SQLite waits for a locked database
+	// before returning SQLITE_BUSY. Raise it for very high PPS scans.
+	BusyTimeoutMs int `mapstructure:"busy_timeout_ms"`
 }
 
 // Defaults applied when no other source provides a value.
@@ -143,6 +151,7 @@ const (
 
 	// Storage
 	DefaultSQLiteSyncMode = "NORMAL"
+	DefaultBusyTimeoutMs  = 5000
 
 	// Common
 	DefaultEnableQuery = true
@@ -184,6 +193,7 @@ var (
 	defaultMaxPluginsDisplayLen    = DefaultMaxPluginsDisplayLen
 	defaultMaxPlayerNamesDisplayLen = DefaultMaxPlayerNamesDisplayLen
 	defaultSQLiteSyncMode          = DefaultSQLiteSyncMode
+	defaultBusyTimeoutMs           = DefaultBusyTimeoutMs
 	defaultEnableQuery            = DefaultEnableQuery
 	defaultExpand                 = DefaultExpand
 	defaultLoginUser              = DefaultLoginUser
@@ -367,7 +377,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("max_player_names_display_len", defaultMaxPlayerNamesDisplayLen)
 
 	// Storage
-	v.SetDefault("sqlite_sync_mode", defaultSQLiteSyncMode)
+	v.SetDefault("storage.sqlite_sync_mode", defaultSQLiteSyncMode)
+	v.SetDefault("storage.busy_timeout_ms", defaultBusyTimeoutMs)
 
 	// Common
 	v.SetDefault("enable_query", defaultEnableQuery)

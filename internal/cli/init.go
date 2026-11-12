@@ -131,7 +131,12 @@ max_plugins_display_len: 60
 max_player_names_display_len: 30
 
 # Storage settings
-sqlite_sync_mode: "NORMAL"
+storage:
+  sqlite_sync_mode: "NORMAL"
+  # How long SQLite waits for a locked database before returning
+  # SQLITE_BUSY. The default is fine for ~200-300 PPS; raise it (e.g.
+  # 30000) for very high PPS scans.
+  busy_timeout_ms: 5000
 
 # Common settings
 login_user: "Herobrine"

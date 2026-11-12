@@ -54,6 +54,9 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.EnableExpansion {
 		t.Errorf("EnableExpansion = false, want true")
 	}
+	if cfg.Storage.BusyTimeoutMs != defaultBusyTimeoutMs {
+		t.Errorf("Storage.BusyTimeoutMs = %d, want %d", cfg.Storage.BusyTimeoutMs, defaultBusyTimeoutMs)
+	}
 }
 
 func TestLoadFromYAMLFile(t *testing.T) {
@@ -74,6 +77,8 @@ ports: 25565
 enable_query: false
 enable_expansion: false
 verbose: true
+storage:
+  busy_timeout_ms: 30000
 `
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatalf("write yaml: %v", err)
@@ -104,6 +109,9 @@ verbose: true
 	}
 	if !cfg.Verbose {
 		t.Errorf("Verbose = false, want true")
+	}
+	if cfg.Storage.BusyTimeoutMs != 30000 {
+		t.Errorf("Storage.BusyTimeoutMs = %d, want 30000 (from YAML nested storage section)", cfg.Storage.BusyTimeoutMs)
 	}
 }
 

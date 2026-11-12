@@ -39,3 +39,17 @@ Dizer: "Este comando vai apagar os últimos 3 commits permanentemente.
 Players em `sample_players` devem ser **acumulados**, não substituídos. Quando um servidor é re-probado, novos nomes de players devem ser **adicionados** à lista existente, não sobrescritos.
 
 Ver `docs/players-incremental.md` para a especificação completa.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in `NaN-1337-MC/doorsniff`, driven by the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical triage roles, each label string equal to its name: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` at the repo root plus ADRs in `docs/adr/`. See `docs/agents/domain.md`.

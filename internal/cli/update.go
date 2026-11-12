@@ -56,6 +56,7 @@ func runUpdate(args []string) error {
 		debugLoginFlag     bool
 		asciiFlag          bool
 		playerHistoryFlag  bool
+		busyTimeoutFlag    int
 	)
 
 	fs.StringVar(&versionFlag, "version", "", "filter by version (e.g. 1.21.1)")
@@ -75,6 +76,7 @@ func runUpdate(args []string) error {
 	fs.BoolVar(&debugLoginFlag, "debug-login", cfg.DebugLogin, "dump raw login packet bytes + disconnect reasons to stderr (debug)")
 	fs.BoolVar(&playerHistoryFlag, "playerhistory", cfg.UpdatePlayerHistory, "record player visit history")
 	fs.BoolVar(&asciiFlag, "ascii", cfg.ASCII, "plain output (no colour, ASCII border and bar)")
+	fs.IntVar(&busyTimeoutFlag, "busy-timeout", cfg.Storage.BusyTimeoutMs, "SQLite busy timeout in ms (raise for very high PPS)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -124,7 +126,7 @@ func runUpdate(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := storage.Open(ctx, dbPath)
+	db, err := storage.Open(ctx, dbPath, storage.WithBusyTimeout(busyTimeoutFlag))
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
 	}
@@ -817,6 +819,7 @@ func updateUsage() string {
 	b.WriteString("  --debug-login    dump raw login packet bytes + disconnect reasons to stderr\n")
 	b.WriteString("  --ascii          plain output (no colour, ASCII border and bar)\n")
 	b.WriteString(fmt.Sprintf("  --playerhistory  record player visit history (default %t)\n", config.DefaultUpdatePlayerHistory))
+	b.WriteString(fmt.Sprintf("  --busy-timeout MS  SQLite busy timeout in ms (default %d)\n", config.DefaultBusyTimeoutMs))
 	b.WriteString("\nServers are updated oldest-first (by last_seen).\n")
 	b.WriteString("\nExamples:\n")
 	b.WriteString("  doorsniff re-probe\n")

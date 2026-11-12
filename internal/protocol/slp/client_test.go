@@ -144,13 +144,14 @@ func TestParseMalformedErrors(t *testing.T) {
 }
 
 func TestBuildHandshake(t *testing.T) {
-	b, err := buildHandshake("mc.example.com", 25565)
+	b, err := buildHandshake("mc.example.com", 25565, handshakeProtocolPrimary)
 	if err != nil {
 		t.Fatalf("buildHandshake: %v", err)
 	}
 	// Expect at least: length varint (1 byte) + packet id (1 byte) +
-	// protocol (5 bytes for -1) + host (varint length + 14 bytes) +
-	// port (2 bytes) + next_state (1 byte).
+	// protocol varint + host (varint length + 14 bytes) +
+	// port (2 bytes) + next_state (1 byte). For protocol 768 the
+	// protocol varint is 2 bytes; for -1 it is 5 bytes.
 	if len(b) < 10 {
 		t.Errorf("handshake too short: %d bytes", len(b))
 	}

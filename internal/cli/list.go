@@ -66,6 +66,7 @@ func runList(args []string) error {
 		motdFlag       string
 		loginModeFlag  string
 		sortFlag       string
+		reverseFlag    bool
 		limitFlag      int
 		databaseFlag   string
 		playerFlag     string
@@ -88,6 +89,7 @@ func runList(args []string) error {
 	fs.StringVar(&motdFlag, "motd", "", "search MOTD for keywords")
 	fs.StringVar(&loginModeFlag, "login", "", "filter by login mode (cracked, premium, whitelist, banned, kicked, full)")
 	fs.StringVar(&sortFlag, "sort", cfg.ListSort, "sort by: players, latency, version, port, recent, oldest, login")
+	fs.BoolVar(&reverseFlag, "reverse", false, "reverse sort order")
 	fs.IntVar(&limitFlag, "limit", cfg.ListLimit, "max results to show (0 = no limit)")
 	fs.StringVar(&databaseFlag, "database", "", "override database path")
 	fs.StringVar(&playerFlag, "player", "", "filter by player name (substring match, comma-separated for OR)")
@@ -109,7 +111,7 @@ func runList(args []string) error {
 		return fmt.Errorf("parsing flags: %w", err)
 	}
 
-	orderBy, err := ParseSortKey(sortFlag)
+	orderBy, err := ParseSortKey(sortFlag, reverseFlag)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
@@ -501,6 +503,7 @@ func listUsage() string {
 	b.WriteString("  --motd TEXT      search MOTD for keywords\n")
 	b.WriteString("  --login MODE     filter by login mode (cracked, premium, whitelist, banned, kicked, full)\n")
 	b.WriteString("  --sort KEY       sort by: players, latency, version, port, recent, oldest, login\n")
+	b.WriteString("  --reverse        reverse sort order\n")
 	b.WriteString("  --limit N        max results (0 = no limit)\n")
 	b.WriteString("  --database PATH  override database path\n")
 	b.WriteString("  --player TEXT    filter by player name (substring, comma-separated for OR)\n")
